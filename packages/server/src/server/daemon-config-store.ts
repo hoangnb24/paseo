@@ -17,7 +17,7 @@ type ProviderOverride = import("./agent/provider-launch-config.js").ProviderOver
 
 interface SupportedMutableConfigPatch {
   relay?: { enabled?: boolean };
-  mcp?: { injectIntoAgents?: boolean };
+  mcp?: { enabled?: boolean; injectIntoAgents?: boolean; injectIntoProviders?: string[] };
   browserTools?: { enabled?: boolean };
   providers?: MutableDaemonConfig["providers"];
   removeProviders?: string[];
@@ -170,6 +170,7 @@ const RELOADABLE_PATHS = [
   "daemon.relay.enabled",
   "daemon.mcp.enabled",
   "daemon.mcp.injectIntoAgents",
+  "daemon.mcp.injectIntoProviders",
   "daemon.browserTools.enabled",
   "daemon.hostnames",
   "daemon.cors.allowedOrigins",
@@ -192,6 +193,7 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.relay.enabled", "relay.enabled"],
   ["daemon.mcp.enabled", "mcp.enabled"],
   ["daemon.mcp.injectIntoAgents", "mcp.injectIntoAgents"],
+  ["daemon.mcp.injectIntoProviders", "mcp.injectIntoProviders"],
   ["daemon.browserTools.enabled", "browserTools.enabled"],
   ["daemon.hostnames", "hostnames"],
   ["daemon.cors.allowedOrigins", "cors.allowedOrigins"],
@@ -248,8 +250,18 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
 function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
   return {
     ...(patch.relay?.enabled !== undefined ? { relay: { enabled: patch.relay.enabled } } : {}),
-    ...(patch.mcp?.injectIntoAgents !== undefined
-      ? { mcp: { injectIntoAgents: patch.mcp.injectIntoAgents } }
+    ...(patch.mcp !== undefined
+      ? {
+          mcp: {
+            ...(patch.mcp.enabled !== undefined ? { enabled: patch.mcp.enabled } : {}),
+            ...(patch.mcp.injectIntoAgents !== undefined
+              ? { injectIntoAgents: patch.mcp.injectIntoAgents }
+              : {}),
+            ...(patch.mcp.injectIntoProviders !== undefined
+              ? { injectIntoProviders: patch.mcp.injectIntoProviders }
+              : {}),
+          },
+        }
       : {}),
     ...(patch.browserTools?.enabled !== undefined
       ? { browserTools: { enabled: patch.browserTools.enabled } }
@@ -616,8 +628,17 @@ function mergeMutableDaemonPatch(
   if (persistRelayEnabled && patch.relay?.enabled !== undefined) {
     next.relay = { ...next.relay, enabled: patch.relay.enabled };
   }
-  if (patch.mcp?.injectIntoAgents !== undefined) {
-    next.mcp = { ...next.mcp, injectIntoAgents: patch.mcp.injectIntoAgents };
+  if (patch.mcp !== undefined) {
+    next.mcp = {
+      ...next.mcp,
+      ...(patch.mcp.enabled !== undefined ? { enabled: patch.mcp.enabled } : {}),
+      ...(patch.mcp.injectIntoAgents !== undefined
+        ? { injectIntoAgents: patch.mcp.injectIntoAgents }
+        : {}),
+      ...(patch.mcp.injectIntoProviders !== undefined
+        ? { injectIntoProviders: patch.mcp.injectIntoProviders }
+        : {}),
+    };
   }
   if (patch.browserTools?.enabled !== undefined) {
     next.browserTools = { ...next.browserTools, enabled: patch.browserTools.enabled };

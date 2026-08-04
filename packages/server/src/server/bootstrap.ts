@@ -395,6 +395,7 @@ export interface PaseoDaemonConfig {
   trustedProxies?: true | string[];
   mcpEnabled?: boolean;
   mcpInjectIntoAgents?: boolean;
+  mcpInjectIntoProviders?: string[];
   browserToolsEnabled?: boolean;
   git?: {
     maxProcessesPerSecond: number;
@@ -531,6 +532,9 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     mcp: {
       enabled: config.mcpEnabled ?? true,
       injectIntoAgents: config.mcpInjectIntoAgents ?? true,
+      ...(config.mcpInjectIntoProviders !== undefined
+        ? { injectIntoProviders: config.mcpInjectIntoProviders }
+        : {}),
     },
     ...(config.hostnames !== undefined ? { hostnames: config.hostnames } : {}),
     cors: { allowedOrigins: config.corsAllowedOrigins },
@@ -1355,6 +1359,7 @@ export async function createPaseoDaemon(
     createPaseoToolCatalog(createAgentToolHostDependencies(runtime));
   agentManager.setPaseoToolCatalogFactory(createAgentToolCatalog);
   agentManager.setPaseoToolsEnabled(config.mcpInjectIntoAgents !== false);
+  agentManager.setPaseoToolProviderIds(config.mcpInjectIntoProviders);
 
   let mcpEnabled = config.mcpEnabled ?? true;
   let agentMcpBaseUrl: string | null = null;
@@ -1523,6 +1528,7 @@ export async function createPaseoDaemon(
               !mcpEnabled || config.mcpInjectIntoAgents === false ? null : mcpBaseUrl;
             agentManager.setMcpBaseUrl(agentMcpBaseUrl);
             agentManager.setPaseoToolsEnabled(mcpEnabled && config.mcpInjectIntoAgents !== false);
+            agentManager.setPaseoToolProviderIds(config.mcpInjectIntoProviders);
             daemonConfigStore.onFieldChange("mcp.enabled", (value) => {
               mcpEnabled = value !== false;
               const inject = daemonConfigStore.get().mcp.injectIntoAgents !== false;
@@ -1532,6 +1538,9 @@ export async function createPaseoDaemon(
             daemonConfigStore.onFieldChange("mcp.injectIntoAgents", (value) => {
               agentManager.setMcpBaseUrl(mcpEnabled && value ? mcpBaseUrl : null);
               agentManager.setPaseoToolsEnabled(mcpEnabled && value !== false);
+            });
+            daemonConfigStore.onFieldChange("mcp.injectIntoProviders", (value) => {
+              agentManager.setPaseoToolProviderIds(Array.isArray(value) ? value : undefined);
             });
             daemonConfigStore.onFieldChange("appendSystemPrompt", (value) => {
               agentManager.setAppendSystemPrompt(typeof value === "string" ? value : "");

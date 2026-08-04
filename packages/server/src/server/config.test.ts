@@ -150,6 +150,26 @@ describe("server config", () => {
     );
 
     expect(config.configReload?.overrideControlledPaths).toEqual(expected);
+  test("loads the exact provider allowlist for Paseo tool injection", async () => {
+    const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-config-mcp-providers-"));
+    roots.push(paseoHome);
+    await writeFile(
+      path.join(paseoHome, "config.json"),
+      JSON.stringify({
+        version: 1,
+        daemon: {
+          mcp: {
+            injectIntoAgents: true,
+            injectIntoProviders: ["codex-supervisor", "codex-lead"],
+          },
+        },
+      }),
+    );
+
+    const config = loadConfig(paseoHome, { env: {} });
+
+    expect(config.mcpInjectIntoAgents).toBe(true);
+    expect(config.mcpInjectIntoProviders).toEqual(["codex-supervisor", "codex-lead"]);
   });
 
   test("resolves bundled web UI path from source-tree modules", () => {
