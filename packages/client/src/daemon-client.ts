@@ -4614,6 +4614,9 @@ export class DaemonClient {
     config: MutableDaemonConfigPatch,
     requestId?: string,
   ): Promise<{ requestId: string; config: MutableDaemonConfig }> {
+    if (config.mcp && Object.hasOwn(config.mcp, "injectIntoProviders")) {
+      this.requireProviderScopedPaseoToolsSupport();
+    }
     return this.sendCorrelatedSessionRequest({
       requestId,
       message: {
@@ -5346,6 +5349,13 @@ export class DaemonClient {
     // COMPAT(daemonConfigReload): added in v0.4.0, remove gate after 2027-02-14.
     if (this.lastServerInfoMessage?.features?.daemonConfigReload !== true) {
       throw new Error("Update the host to reload daemon configuration.");
+    }
+  }
+
+  private requireProviderScopedPaseoToolsSupport(): void {
+    // COMPAT(providerScopedPaseoTools): added in v0.2.6, remove gate after 2027-02-04 once daemon floor >= v0.2.6.
+    if (this.lastServerInfoMessage?.features?.providerScopedPaseoTools !== true) {
+      throw new Error("Update the host to configure provider-scoped Paseo tools.");
     }
   }
 
