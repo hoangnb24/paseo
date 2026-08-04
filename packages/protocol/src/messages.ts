@@ -235,7 +235,7 @@ export const MutableDaemonConfigPatchSchema = z
       .object({
         enabled: z.boolean().optional(),
         injectIntoAgents: z.boolean().optional(),
-        injectIntoProviders: z.array(AgentProviderSchema).optional(),
+        injectIntoProviders: z.union([z.array(AgentProviderSchema), z.null()]).optional(),
       })
       .passthrough()
       .optional(),

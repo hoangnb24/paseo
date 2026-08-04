@@ -17,7 +17,11 @@ type ProviderOverride = import("./agent/provider-launch-config.js").ProviderOver
 
 interface SupportedMutableConfigPatch {
   relay?: { enabled?: boolean };
-  mcp?: { enabled?: boolean; injectIntoAgents?: boolean; injectIntoProviders?: string[] };
+  mcp?: {
+    enabled?: boolean;
+    injectIntoAgents?: boolean;
+    injectIntoProviders?: string[] | null;
+  };
   browserTools?: { enabled?: boolean };
   providers?: MutableDaemonConfig["providers"];
   removeProviders?: string[];
@@ -355,6 +359,9 @@ export class DaemonConfigStore {
     const removedProviders = Array.from(new Set(removeProviders));
     const merged = deepMerge(this.current, configPatch);
     if (parsedPatch.plugins !== undefined) merged.plugins = parsedPatch.plugins;
+    if (configPatch.mcp?.injectIntoProviders === null) {
+      delete merged.mcp.injectIntoProviders;
+    }
     const next = MutableDaemonConfigSchema.parse(
       omitMetadataGenerationProvidersFromConfig(
         omitProvidersFromConfig(merged, removedProviders),
@@ -629,16 +636,19 @@ function mergeMutableDaemonPatch(
     next.relay = { ...next.relay, enabled: patch.relay.enabled };
   }
   if (patch.mcp !== undefined) {
-    next.mcp = {
+    const nextMcp = {
       ...next.mcp,
       ...(patch.mcp.enabled !== undefined ? { enabled: patch.mcp.enabled } : {}),
       ...(patch.mcp.injectIntoAgents !== undefined
         ? { injectIntoAgents: patch.mcp.injectIntoAgents }
         : {}),
-      ...(patch.mcp.injectIntoProviders !== undefined
+      ...(patch.mcp.injectIntoProviders !== undefined &&
+      patch.mcp.injectIntoProviders !== null
         ? { injectIntoProviders: patch.mcp.injectIntoProviders }
         : {}),
     };
+    if (patch.mcp.injectIntoProviders === null) delete nextMcp.injectIntoProviders;
+    next.mcp = nextMcp;
   }
   if (patch.browserTools?.enabled !== undefined) {
     next.browserTools = { ...next.browserTools, enabled: patch.browserTools.enabled };
