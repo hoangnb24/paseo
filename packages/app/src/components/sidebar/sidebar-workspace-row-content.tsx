@@ -4,11 +4,10 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from "react-native-svg";
 import { CircleAlert, Folder, FolderGit2, Monitor } from "lucide-react-native";
 import { ProjectStatusIndicator } from "@/components/sidebar/project-leading-visual";
-import type { SurfaceBackdrop } from "@/styles/surface-backdrop";
-import { PulsingStatusDot } from "@/components/sidebar/pulsing-status-dot";
+import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
 import {
   WorkspaceMetaRow,
-  type WorkspaceScriptSummary,
+  type WorkspaceServiceSummary,
 } from "@/components/sidebar/workspace-meta-row";
 import { WorkspaceHoverCard } from "@/components/workspace-hover-card";
 import type { HostBadgeModel } from "@/hosts/appearance";
@@ -20,8 +19,14 @@ import {
 import { useAppSettings } from "@/hooks/use-settings";
 import type { Theme } from "@/styles/theme";
 import type { SidebarStateBucket } from "@/utils/sidebar-agent-state";
-import { getStatusDotColor, isEmphasizedStatusDotBucket } from "@/utils/status-dot-color";
+import { getStatusDotColor } from "@/utils/status-dot-color";
+import {
+  STATUS_INDICATOR_ALERT_SIZE,
+  STATUS_INDICATOR_DOT_SIZE,
+  STATUS_INDICATOR_FILLED_DOT_SIZE,
+} from "@/utils/status-indicator-geometry";
 import { shouldRenderSyncedStatusLoader } from "@/utils/status-loader";
+import { StatusRing } from "@/components/status-ring";
 import { resolveSidebarWorkspacePrimaryLabel } from "@/components/sidebar/sidebar-workspace-title";
 
 // The scrim spans more than the kebab so the fade starts left of the diff stat. Solid from
@@ -29,24 +34,11 @@ import { resolveSidebarWorkspacePrimaryLabel } from "@/components/sidebar/sideba
 const SCRIM_WIDTH = 48;
 const SCRIM_SOLID_OFFSET = "55%";
 
-/**
- * How far a workspace row sits inside the status header above it. Only status grouping
- * indents: a project row carries an icon and its workspaces line up under it already, but a
- * status header is just a label, so its rows need the offset to read as belonging to it.
- *
- * It is row padding rather than a margin on the list, because the row's hover and selected
- * backgrounds have to keep spanning the group's full width. Indenting the container instead
- * pulls the highlight in with the content and the row stops lining up with its header.
- */
-const WORKSPACE_ROW_INDENT = 12;
-
-const DEFAULT_STATUS_DOT_SIZE = 7;
-const EMPHASIZED_STATUS_DOT_SIZE = 9;
-const DEFAULT_STATUS_DOT_OFFSET = 0;
-const EMPHASIZED_STATUS_DOT_OFFSET = -1;
-
 const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const amberColorMapping = (theme: Theme) => ({ color: theme.colors.palette.amber[500] });
+const needsInputColorMapping = (theme: Theme) => ({
+  color: theme.colors.surface0,
+  fill: getStatusDotColor({ theme, bucket: "needs_input" }) ?? undefined,
+});
 
 const ThemedCircleAlert = withUnistyles(CircleAlert);
 const ThemedMonitor = withUnistyles(Monitor);
@@ -78,7 +70,11 @@ function TrailingActionScrimSvg({ gradientId, color }: { gradientId: string; col
 
 const ThemedTrailingActionScrimSvg = withUnistyles(TrailingActionScrimSvg);
 
-const scrimColorMapping = (theme: Theme) => ({ color: theme.colors.surfaceSidebarHover });
+const scrimColorMappings: Record<SidebarSurfaceBackdrop, (theme: Theme) => { color: string }> = {
+  surfaceSidebar: (theme) => ({ color: theme.colors.surfaceSidebar }),
+  surfaceSidebarHover: (theme) => ({ color: theme.colors.surfaceSidebarHover }),
+  surface2: (theme) => ({ color: theme.colors.surface2 }),
+};
 
 export function SidebarWorkspaceRowFrame({
   workspace,
@@ -117,7 +113,7 @@ export function SidebarWorkspaceRowFrame({
       disabled={contextMenuOpen}
     >
       {children({
-        isHovered: isHovered && !contextMenuOpen,
+        isHovered: isHovered && !contextMenuOpen && !isDragging,
         contextMenuOpen,
         onContextMenuOpenChange: handleContextMenuOpenChange,
         hoverHandlers,
@@ -131,7 +127,7 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   hostBadge,
   leadingProjectName = null,
   leadingProjectIconDataUri = null,
-  scriptSummary = null,
+  serviceSummary = null,
   backdrop,
   isHovered,
   isLoading,
@@ -146,9 +142,9 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   /** Hoisted rows use their project icon as the leading visual because no project row contains them. */
   leadingProjectName?: string | null;
   leadingProjectIconDataUri?: string | null;
-  scriptSummary?: WorkspaceScriptSummary | null;
+  serviceSummary?: WorkspaceServiceSummary | null;
   /** The row's current background, so the project status badge can knock out of it. */
-  backdrop: SurfaceBackdrop;
+  backdrop: SidebarSurfaceBackdrop;
   isHovered: boolean;
   isLoading: boolean;
   isCreating?: boolean;
@@ -200,9 +196,11 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
           </View>
           <WorkspaceMetaRow
+            currentBranch={workspace.currentBranch}
+            projectName={leadingProjectName}
             hostBadge={hostBadge ?? null}
             prHint={workspace.prHint}
-            scriptSummary={scriptSummary}
+            serviceSummary={serviceSummary}
           />
         </View>
       </View>
@@ -226,14 +224,14 @@ function WorkspaceStatusIndicator({
   loading?: boolean;
   reserveIdleSpace?: boolean;
 }) {
-  // Busy is a pulsing dot here for the same reason it is on a project icon: every status in
-  // the sidebar is a dot, and a row with a project icon simply moves that dot onto the icon.
-  // A row starting up and a row working are both busy, so they share the dot and differ only
-  // in testID.
+  // Busy is the only status that moves, and it is the ring rather than a dot for the same
+  // reason it is a dot elsewhere: every status in the sidebar sits in this one slot, so busy
+  // has to fill it without displacing anything. A row starting up and a row working are both
+  // busy, so they share the ring and differ only in testID.
   if (loading) {
     return (
       <View style={styles.workspaceStatusDot} testID="workspace-status-indicator-loading">
-        <PulsingStatusDot style={styles.standaloneRunningDot} />
+        <StatusRing />
       </View>
     );
   }
@@ -241,7 +239,7 @@ function WorkspaceStatusIndicator({
   if (shouldRenderSyncedStatusLoader({ bucket })) {
     return (
       <View style={styles.workspaceStatusDot} testID="workspace-status-indicator-running">
-        <PulsingStatusDot style={styles.standaloneRunningDot} />
+        <StatusRing />
       </View>
     );
   }
@@ -249,7 +247,7 @@ function WorkspaceStatusIndicator({
   if (bucket === "needs_input") {
     return (
       <View style={styles.workspaceStatusDot} testID="workspace-status-indicator-needs_input">
-        <ThemedCircleAlert size={14} uniProps={amberColorMapping} />
+        <ThemedCircleAlert size={STATUS_INDICATOR_ALERT_SIZE} uniProps={needsInputColorMapping} />
       </View>
     );
   }
@@ -280,50 +278,16 @@ function WorkspaceStatusIndicator({
   else KindIcon = ThemedFolder;
 
   const dotColorStyle = getStatusDotColorStyle(bucket);
-  const statusDotSize = isEmphasizedStatusDotBucket(bucket)
-    ? EMPHASIZED_STATUS_DOT_SIZE
-    : DEFAULT_STATUS_DOT_SIZE;
-  const statusDotOffset =
-    statusDotSize === EMPHASIZED_STATUS_DOT_SIZE
-      ? EMPHASIZED_STATUS_DOT_OFFSET
-      : DEFAULT_STATUS_DOT_OFFSET;
   return (
     <View style={styles.workspaceStatusDot} testID={`workspace-status-indicator-${bucket}`}>
       <KindIcon size={14} uniProps={foregroundMutedColorMapping} />
-      {dotColorStyle ? (
-        <StatusDotOverlay
-          dotColorStyle={dotColorStyle}
-          size={statusDotSize}
-          offset={statusDotOffset}
-        />
-      ) : null}
+      {dotColorStyle ? <StatusDotOverlay dotColorStyle={dotColorStyle} /> : null}
     </View>
   );
 }
 
-function StatusDotOverlay({
-  dotColorStyle,
-  size,
-  offset,
-}: {
-  dotColorStyle: ViewStyle;
-  size: number;
-  offset: number;
-}) {
-  const overlayStyle = useMemo(
-    () => [
-      styles.statusDotOverlay,
-      dotColorStyle,
-      {
-        width: size,
-        height: size,
-        right: offset,
-        bottom: offset,
-      },
-    ],
-    [dotColorStyle, offset, size],
-  );
-  return <View style={overlayStyle} />;
+function StatusDotOverlay({ dotColorStyle }: { dotColorStyle: ViewStyle }) {
+  return <View style={[styles.statusDotOverlay, dotColorStyle]} />;
 }
 
 function getStatusDotColorStyle(bucket: SidebarStateBucket) {
@@ -342,10 +306,16 @@ function getStatusDotColorStyle(bucket: SidebarStateBucket) {
 }
 
 export const sidebarWorkspaceRowStyles = StyleSheet.create((theme) => ({
-  // Layered over the row's own padding rather than replacing it, so the indent stays one
-  // number here instead of being baked into a row style.
+  // How far a workspace row sits inside the group header above it — a project row or a
+  // status group header. Both groupings share this one indent, so every grouped workspace row
+  // in the sidebar sits on the same rail regardless of how the list is grouped. Pinned rows
+  // are not grouped and stay flush.
+  //
+  // It is row padding rather than a margin on the list, because the row's hover and selected
+  // backgrounds have to keep spanning the group's full width. Indenting the container instead
+  // pulls the highlight in with the content and the row stops lining up with its header.
   rowIndented: {
-    paddingLeft: theme.spacing[2] + WORKSPACE_ROW_INDENT,
+    paddingLeft: theme.spacing[2] + theme.spacing[2],
   },
   rowRight: {
     flexDirection: "row",
@@ -494,18 +464,18 @@ export function SidebarWorkspaceTrailingActionBase({
 
 export function SidebarWorkspaceTrailingActionOverlay({
   visible,
-  scrim = false,
+  scrimBackdrop,
   children,
 }: {
   visible: boolean;
   /** Fade the row into the kebab when something (the diff stat) is still rendered behind it. */
-  scrim?: boolean;
+  scrimBackdrop?: SidebarSurfaceBackdrop;
   children: ReactNode;
 }) {
   if (!visible || !children) return null;
   return (
     <>
-      {scrim ? <TrailingActionScrim /> : null}
+      {scrimBackdrop ? <TrailingActionScrim backdrop={scrimBackdrop} /> : null}
       <View style={sidebarWorkspaceRowStyles.trailingActionOverlay}>{children}</View>
     </>
   );
@@ -520,14 +490,21 @@ export function SidebarWorkspaceTrailingActionOverlay({
  * Anchored to the trailing slot, which is position:relative. Wider than the slot on purpose:
  * the fade has to start before the diff stat does or the diff's left edge cuts off hard.
  */
-function TrailingActionScrim() {
+function TrailingActionScrim({ backdrop }: { backdrop: SidebarSurfaceBackdrop }) {
   // useId's output contains characters that are not legal inside url(#...) — React 19 wraps
   // ids in guillemets, React 18 in colons — and an unresolvable fill paints nothing at all.
   // Keep the per-instance uniqueness, drop everything a fragment reference can't carry.
   const gradientId = `sidebar-scrim-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   return (
-    <View style={sidebarWorkspaceRowStyles.trailingActionScrim} pointerEvents="none">
-      <ThemedTrailingActionScrimSvg gradientId={gradientId} uniProps={scrimColorMapping} />
+    <View
+      style={sidebarWorkspaceRowStyles.trailingActionScrim}
+      pointerEvents="none"
+      testID="sidebar-workspace-trailing-scrim"
+    >
+      <ThemedTrailingActionScrimSvg
+        gradientId={gradientId}
+        uniProps={scrimColorMappings[backdrop]}
+      />
     </View>
   );
 }
@@ -568,24 +545,22 @@ const styles = StyleSheet.create((theme) => ({
   },
   statusDotOverlay: {
     position: "absolute",
+    right: 0,
+    bottom: 0,
+    width: STATUS_INDICATOR_DOT_SIZE,
+    height: STATUS_INDICATOR_DOT_SIZE,
     borderRadius: theme.borderRadius.full,
     borderWidth: 1,
   },
   standaloneStatusDot: {
-    width: 8,
-    height: 8,
+    width: STATUS_INDICATOR_FILLED_DOT_SIZE,
+    height: STATUS_INDICATOR_FILLED_DOT_SIZE,
     borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.palette.green[500],
-  },
-  standaloneRunningDot: {
-    width: 8,
-    height: 8,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: getStatusDotColor({ theme, bucket: "running" }) ?? undefined,
+    backgroundColor: getStatusDotColor({ theme, bucket: "attention" }) ?? undefined,
   },
   idleStatusDot: {
-    width: 8,
-    height: 8,
+    width: STATUS_INDICATOR_FILLED_DOT_SIZE,
+    height: STATUS_INDICATOR_FILLED_DOT_SIZE,
     borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.foregroundExtraMuted,
     opacity: 0.3,
@@ -608,11 +583,11 @@ const styles = StyleSheet.create((theme) => ({
     opacity: 1,
   },
   statusDotNeedsInput: {
-    backgroundColor: theme.colors.palette.amber[500],
+    backgroundColor: getStatusDotColor({ theme, bucket: "needs_input" }) ?? undefined,
     borderColor: theme.colors.surface0,
   },
   statusDotFailed: {
-    backgroundColor: theme.colors.palette.red[500],
+    backgroundColor: getStatusDotColor({ theme, bucket: "failed" }) ?? undefined,
     borderColor: theme.colors.surface0,
   },
   statusDotRunning: {
@@ -620,7 +595,7 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.surface0,
   },
   statusDotAttention: {
-    backgroundColor: theme.colors.palette.green[500],
+    backgroundColor: getStatusDotColor({ theme, bucket: "attention" }) ?? undefined,
     borderColor: theme.colors.surface0,
   },
 }));

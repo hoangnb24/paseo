@@ -24,6 +24,8 @@ type NewWorkspaceDaemonClient = Pick<
   | "on"
   | "patchDaemonConfig"
   | "removeProject"
+  | "removePlugin"
+  | "reloadPlugin"
 >;
 
 type CreateWorkspacePayload = Awaited<ReturnType<NewWorkspaceDaemonClient["createWorkspace"]>>;
@@ -233,6 +235,33 @@ export async function expectNewWorkspaceProjectSelected(
   const projectPicker = page.getByRole("button", { name: "Workspace project" });
   await expect(projectPicker).toBeVisible({ timeout: 30_000 });
   await expect(projectPicker).toContainText(projectDisplayName);
+}
+
+export async function expectNewWorkspaceTriggerLabelsAligned(
+  page: Page,
+  input: { projectLabel: string; hostLabel: string },
+): Promise<void> {
+  const projectTrigger = page.getByRole("button", { name: "Workspace project" });
+  const hostTrigger = page.getByRole("button", { name: "Host", exact: true });
+  const projectLabel = projectTrigger.getByText(input.projectLabel, { exact: true });
+  const hostLabel = hostTrigger.getByText(input.hostLabel, { exact: true });
+  await Promise.all([
+    expect(projectLabel).toBeVisible({ timeout: 30_000 }),
+    expect(hostLabel).toBeVisible({ timeout: 30_000 }),
+  ]);
+  const [projectTriggerBox, projectLabelBox, hostTriggerBox, hostLabelBox] = await Promise.all([
+    projectTrigger.boundingBox(),
+    projectLabel.boundingBox(),
+    hostTrigger.boundingBox(),
+    hostLabel.boundingBox(),
+  ]);
+  if (!projectTriggerBox || !projectLabelBox || !hostTriggerBox || !hostLabelBox) {
+    throw new Error("New Workspace trigger geometry could not be measured");
+  }
+
+  const projectLabelInset = projectLabelBox.x - projectTriggerBox.x;
+  const hostLabelInset = hostLabelBox.x - hostTriggerBox.x;
+  expect(hostLabelInset).toBeCloseTo(projectLabelInset, 0);
 }
 
 export async function fillNewWorkspaceDraft(page: Page, draft: string): Promise<void> {

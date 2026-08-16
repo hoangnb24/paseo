@@ -333,6 +333,7 @@ export function AnchoredSurface({
     <>
       {backdrop ? (
         <Pressable
+          {...{ onContextMenu: onClose }}
           accessibilityRole="button"
           accessibilityLabel={t("menu.backdrop")}
           style={styles.backdrop}
@@ -384,12 +385,10 @@ export function AnchoredSurface({
 export function MenuOverlay({
   visible,
   onClose,
-  onDismiss,
   children,
 }: {
   visible: boolean;
   onClose: () => void;
-  onDismiss?: () => void;
   children: ReactElement | null;
 }): ReactElement | null {
   const floatingLayer = useOverlayLayer("floating");
@@ -415,6 +414,9 @@ export function MenuOverlay({
   const overlay = (
     <OverlayLayerProvider layer={floatingLayer}>
       <View
+        {...{
+          onContextMenu: (event: { preventDefault?: () => void }) => event.preventDefault?.(),
+        }}
         ref={setWebOverlayScope}
         collapsable={false}
         style={[
@@ -438,7 +440,6 @@ export function MenuOverlay({
       transparent
       animationType="none"
       statusBarTranslucent={Platform.OS === "android"}
-      onDismiss={onDismiss}
       onRequestClose={onClose}
     >
       {overlay}

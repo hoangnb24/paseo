@@ -15,6 +15,7 @@ import {
   type SettingsDeps,
 } from "./storage";
 import { createFakeDesktopBridge, createInMemoryKeyValueStorage } from "./fakes";
+import { THEME_OPTIONS } from "@/styles/theme";
 
 const LEGACY_SETTINGS_KEY = "@paseo:settings";
 
@@ -40,6 +41,18 @@ describe("loadAppSettingsFromStorage", () => {
     const result = await loadAppSettingsFromStorage(deps);
 
     expect(result.theme).toBe("auto");
+  });
+
+  it.each(THEME_OPTIONS)("loads the persisted $name theme", async ({ name }) => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({ theme: name }),
+      }),
+    });
+
+    const result = await loadAppSettingsFromStorage(deps);
+
+    expect(result.theme).toBe(name);
   });
 
   it("seeds storage with the client defaults when nothing is persisted", async () => {
@@ -255,6 +268,7 @@ describe("loadSettingsFromStorage", () => {
       isElectron: true,
       settings: {
         releaseChannel: "beta",
+        notifications: { playSound: true },
         daemon: { manageBuiltInDaemon: false, keepRunningAfterQuit: true },
       },
     });
@@ -381,14 +395,37 @@ describe("appearance settings", () => {
     expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe("overview");
   });
 
-  it("maps an unrecognized tool call detail level to overview", async () => {
+  it("clears settings with an unrecognized tool call detail level", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
         [APP_SETTINGS_KEY]: JSON.stringify({ toolCallDetailLevel: "unknown" }),
       }),
     });
 
-    expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe("overview");
+    expect((await loadAppSettingsFromStorage(deps)).toolCallDetailLevel).toBe("detailed");
+  });
+
+  it("migrates a switched-off checks row item to the hidden checks display", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({ sidebarRowItems: { checks: false } }),
+      }),
+    });
+
+    expect((await loadAppSettingsFromStorage(deps)).sidebarChecksDisplay).toBe("none");
+  });
+
+  it("lets a stored checks display win over the row item it replaced", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({
+          sidebarChecksDisplay: "icon",
+          sidebarRowItems: { checks: false },
+        }),
+      }),
+    });
+
+    expect((await loadAppSettingsFromStorage(deps)).sidebarChecksDisplay).toBe("icon");
   });
 
   it("clamps the UI font size into range and rejects non-numeric values", async () => {
