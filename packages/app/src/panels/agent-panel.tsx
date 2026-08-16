@@ -52,12 +52,17 @@ import { useArchiveAgent } from "@/hooks/use-archive-agent";
 import { useKeyboardShiftStyle } from "@/hooks/use-keyboard-shift-style";
 import { useContainerWidthBelow } from "@/hooks/use-container-width";
 import { reconcileMissingAgentStateWithPresentAgent } from "@/panels/agent-panel-load-state";
+import {
+  reconcileReconnectToastState,
+  type ReconnectToastState,
+} from "@/panels/reconnect-toast-state";
 import { usePaneContext, usePaneFocus } from "@/panels/pane-context";
 import type { PanelDescriptor, PanelRegistration } from "@/panels/panel-registry";
 import { RenderProfile } from "@/utils/render-profiler";
 import { buildDraftPanelDescriptor } from "@/panels/draft-panel-descriptor";
 import {
   type HostRuntimeConnectionStatus,
+  getHostRuntimeConnectionStatusSince,
   useHostRuntimeClient,
   useHostRuntimeConnectionStatus,
   useHostRuntimeIsConnected,
@@ -69,6 +74,7 @@ import {
   deriveRouteBottomAnchorRequest,
 } from "@/screens/agent/agent-ready-screen-bottom-anchor";
 import { WorkspaceDraftAgentTab } from "@/composer/draft/workspace-tab";
+import { AgentTaskList } from "@/composer/task-list";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import { usePanelStore } from "@/stores/panel-store";
@@ -82,7 +88,7 @@ import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import type { Theme } from "@/styles/theme";
 import {
-  useHideFinishedProviderSubagents,
+  useArchiveFinishedSubagents,
   useArchiveSubagent,
   useDetachSubagent,
   useSubagentsForParent,
@@ -113,6 +119,10 @@ interface ChatAgentStateShape {
   features?: Agent["features"];
   lastError?: Agent["lastError"] | null;
 }
+
+const RECONNECT_TOAST_DELAY_MS = 1_000;
+
+const reconnectToastStateByServerId = new Map<string, ReconnectToastState>();
 
 interface ChatAgentSelectedState extends ChatAgentStateShape {
   archivedAt: Date | null;
@@ -768,7 +778,7 @@ function ChatAgentContent({
   const streamViewRef = useRef<AgentStreamViewHandle>(null);
   const clearOnAgentBlurRef = useRef<() => void>(() => {});
   const wasPaneFocusedRef = useRef(isPaneFocused);
-  const reconnectToastArmedRef = useRef(false);
+  const reconnectToastPresentedRef = useRef(false);
   const initAttemptTokenRef = useRef(0);
   const routeBottomAnchorRequestRef = useRef<{
     routeKey: string;
@@ -857,26 +867,72 @@ function ChatAgentContent({
   const { style: animatedKeyboardStyle } = useKeyboardShiftStyle({
     mode: "translate",
   });
+  const shouldPresentReconnectToast =
+    isPaneVisible && connectionStatus !== "online" && connectionStatus !== "idle";
 
   useEffect(() => {
-    if (connectionStatus === "online") {
-      if (reconnectToastArmedRef.current) {
-        reconnectToastArmedRef.current = false;
+    if (connectionStatus === "online" || connectionStatus === "idle") {
+      reconnectToastStateByServerId.delete(serverId);
+    }
+
+    if (!shouldPresentReconnectToast) {
+      if (reconnectToastPresentedRef.current) {
+        reconnectToastPresentedRef.current = false;
         dismissToast();
       }
       return;
     }
-    if (connectionStatus === "idle") {
+
+    const startedAt = getHostRuntimeConnectionStatusSince(serverId) ?? Date.now();
+    const previousReconnectToastState = reconnectToastStateByServerId.get(serverId);
+    const reconnectToastState = reconcileReconnectToastState(
+      previousReconnectToastState,
+      startedAt,
+    );
+    if (reconnectToastState !== previousReconnectToastState) {
+      reconnectToastStateByServerId.set(serverId, reconnectToastState);
+    }
+
+    if (reconnectToastState.presented) {
+      if (!reconnectToastPresentedRef.current) {
+        reconnectToastPresentedRef.current = true;
+        toastApi.show(t("agentPanel.states.reconnecting"), {
+          durationMs: null,
+          icon: (
+            <View
+              accessible={false}
+              testID="agent-reconnecting-status-dot"
+              style={styles.reconnectingStatusDot}
+            />
+          ),
+          testID: "agent-reconnecting-toast",
+        });
+      }
       return;
     }
-    if (!reconnectToastArmedRef.current) {
-      reconnectToastArmedRef.current = true;
+
+    const delayMs = Math.max(0, startedAt + RECONNECT_TOAST_DELAY_MS - Date.now());
+    const timer = setTimeout(() => {
+      if (reconnectToastStateByServerId.get(serverId) !== reconnectToastState) {
+        return;
+      }
+      reconnectToastState.presented = true;
+      reconnectToastPresentedRef.current = true;
       toastApi.show(t("agentPanel.states.reconnecting"), {
         durationMs: null,
+        icon: (
+          <View
+            accessible={false}
+            testID="agent-reconnecting-status-dot"
+            style={styles.reconnectingStatusDot}
+          />
+        ),
         testID: "agent-reconnecting-toast",
       });
-    }
-  }, [connectionStatus, dismissToast, toastApi, t]);
+    }, delayMs);
+
+    return () => clearTimeout(timer);
+  }, [connectionStatus, dismissToast, serverId, shouldPresentReconnectToast, toastApi, t]);
 
   const isArchivingCurrentAgent = Boolean(agentId && isArchivingAgent({ serverId, agentId }));
 
@@ -1172,7 +1228,9 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   // when only toast state changes (which does not affect any draft field).
   const {
     text,
-    setText,
+    editText,
+    replaceText,
+    textReplacementKey,
     attachments,
     setAttachments,
     clear,
@@ -1183,7 +1241,9 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   const agentInputDraft = useMemo(
     (): AgentInputDraft => ({
       text,
-      setText,
+      editText,
+      replaceText,
+      textReplacementKey,
       attachments,
       setAttachments,
       clear,
@@ -1193,7 +1253,9 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     }),
     [
       text,
-      setText,
+      editText,
+      replaceText,
+      textReplacementKey,
       attachments,
       setAttachments,
       clear,
@@ -1240,7 +1302,10 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   const contentContainer = <View style={styles.contentContainer}>{streamContent}</View>;
 
   return (
-    <RewindComposerRestoreProvider text={agentInputDraft.text} setText={agentInputDraft.setText}>
+    <RewindComposerRestoreProvider
+      text={agentInputDraft.text}
+      setText={agentInputDraft.replaceText}
+    >
       <View style={styles.root}>
         <FileDropZone style={styles.container} disabled={isArchivingCurrentAgent}>
           {contentContainer}
@@ -1467,9 +1532,10 @@ function ActiveAgentComposer({
   );
   const handleArchiveSubagent = useArchiveSubagent({ serverId });
   const handleDetachSubagent = useDetachSubagent({ serverId });
-  const handleHideFinishedProviderSubagents = useHideFinishedProviderSubagents({
+  const archiveFinishedSubagents = useArchiveFinishedSubagents({
     serverId,
     parentAgentId: agentId,
+    rows: subagentRows,
   });
   const workspaceAttachmentScopeKey = useWorkspaceAttachmentScopeKey({
     serverId,
@@ -1557,12 +1623,14 @@ function ActiveAgentComposer({
 
   return (
     <ReanimatedAnimated.View style={inputAreaStyle} onLayout={onInputAreaLayout}>
+      <AgentTaskList serverId={serverId} agentId={agentId} />
       <SubagentsTrack
         rows={subagentRows}
         onOpenSubagent={handleOpenSubagent}
         onOpenProviderSubagent={handleOpenProviderSubagent}
         onArchiveSubagent={handleArchiveSubagent}
-        onArchiveFinished={handleHideFinishedProviderSubagents}
+        onArchiveFinished={archiveFinishedSubagents.archiveFinished}
+        archiveFinishedStatus={archiveFinishedSubagents.status}
         onDetachSubagent={canDetachSubagents ? handleDetachSubagent : undefined}
       />
       <Composer
@@ -1572,14 +1640,15 @@ function ActiveAgentComposer({
         externalKeyboardShift
         isPaneFocused={isPaneFocused}
         value={agentInputDraft.text}
-        onChangeText={agentInputDraft.setText}
+        onChangeText={agentInputDraft.editText}
+        textReplacementKey={agentInputDraft.textReplacementKey}
         attachments={agentInputDraft.attachments}
         attachmentScopeKeys={attachmentScopeKeys}
         onOpenWorkspaceAttachment={handleOpenWorkspaceAttachment}
         onChangeAttachments={agentInputDraft.setAttachments}
         cwd={cwd}
         clearDraft={agentInputDraft.clear}
-        autoFocus={isPaneFocused}
+        autoFocus
         autoFocusKey={String(agentInputDraft.attachmentFocusRequestId)}
         isSubmitLoading={isSubmitLoading}
         onAttentionInputFocus={onAttentionInputFocus}
@@ -1725,6 +1794,12 @@ const styles = StyleSheet.create((theme) => ({
   loadingText: {
     fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
+  },
+  reconnectingStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.colors.palette.amber[500],
   },
   centerState: {
     flex: 1,

@@ -1,7 +1,8 @@
 import type { PrHint } from "@/git/pr-hint";
+import type { SidebarChecksDisplay } from "@/components/sidebar/display-preferences/checks-display";
 import type { SidebarRowItems } from "@/components/sidebar/display-preferences/row-items";
 import { selectCheckSummary, type CheckSummary } from "./check-summary";
-import type { WorkspaceScriptSummary } from "./script-summary";
+import type { WorkspaceServiceSummary } from "./service-summary";
 
 /**
  * What ends up on the line under a workspace title, in the order it is read: where the
@@ -9,10 +10,12 @@ import type { WorkspaceScriptSummary } from "./script-summary";
  * running. Identity first, then the work, then the work's state.
  */
 export type MetaRowItem =
+  | { kind: "branch"; name: string }
+  | { kind: "project"; name: string }
   | { kind: "host" }
   | { kind: "changeRequest"; hint: PrHint }
-  | { kind: "checks"; summary: CheckSummary }
-  | { kind: "scripts"; summary: WorkspaceScriptSummary };
+  | { kind: "checks"; summary: CheckSummary; label: boolean }
+  | { kind: "services"; summary: WorkspaceServiceSummary };
 
 /**
  * Which peers a row should draw, given what it knows and what the user left switched on.
@@ -25,14 +28,31 @@ export type MetaRowItem =
  * has no badge to hand down, so by the time a row sees one it is meant to be drawn.
  */
 export function selectMetaRowItems(input: {
+  currentBranch: string | null;
+  projectName: string | null;
   hasHostBadge: boolean;
   prHint: PrHint | null;
-  scriptSummary: WorkspaceScriptSummary | null;
+  serviceSummary: WorkspaceServiceSummary | null;
   visible: SidebarRowItems;
+  checksDisplay: SidebarChecksDisplay;
 }): MetaRowItem[] {
-  const { hasHostBadge, prHint, scriptSummary, visible } = input;
+  const {
+    currentBranch,
+    projectName,
+    hasHostBadge,
+    prHint,
+    serviceSummary,
+    visible,
+    checksDisplay,
+  } = input;
   const items: MetaRowItem[] = [];
 
+  if (currentBranch && visible.branch) {
+    items.push({ kind: "branch", name: currentBranch });
+  }
+  if (projectName && visible.project) {
+    items.push({ kind: "project", name: projectName });
+  }
   if (hasHostBadge) {
     items.push({ kind: "host" });
   }
@@ -41,18 +61,18 @@ export function selectMetaRowItems(input: {
   }
 
   // Independent of the change request, even though checks are read off one. Tying them together
-  // meant the checks toggle could sit ticked while nothing was drawn, which is a switch that lies
-  // about its own state. Showing checks without the change request beside them is the stranger
-  // combination, but it is the one you asked for and it is what you get.
-  if (visible.checks) {
+  // meant the checks setting could sit on a value while nothing was drawn, which is a control that
+  // lies about its own state. Showing checks without the change request beside them is the
+  // stranger combination, but it is the one you asked for and it is what you get.
+  if (checksDisplay !== "none") {
     const summary = selectCheckSummary(prHint);
     if (summary) {
-      items.push({ kind: "checks", summary });
+      items.push({ kind: "checks", summary, label: checksDisplay === "iconAndText" });
     }
   }
 
-  if (scriptSummary && visible.scripts) {
-    items.push({ kind: "scripts", summary: scriptSummary });
+  if (serviceSummary && visible.services) {
+    items.push({ kind: "services", summary: serviceSummary });
   }
 
   return items;

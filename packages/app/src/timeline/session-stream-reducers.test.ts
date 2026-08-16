@@ -2715,6 +2715,49 @@ describe("processTimelineResponse", () => {
     expect(result.sideEffects).not.toContainEqual(expect.objectContaining({ type: "catch_up" }));
   });
 
+  it("keeps live assistant blocks ordered when merging a disjoint prompt-jump window", () => {
+    const live = processAgentStreamEvents({
+      events: [
+        makeStreamReducerEvent(
+          makeAssistantTimelineEvent("First paragraph.\n\nSecond", "assistant-1"),
+          80,
+        ),
+        makeStreamReducerEvent(makeAssistantTimelineEvent(" paragraph.", "assistant-1"), 81),
+        makeStreamReducerEvent(makeTimelineEvent("newest prompt", "user_message"), 82),
+      ],
+      currentTail: [],
+      currentHead: [],
+      currentCursor: undefined,
+    });
+    expect(getAssistantTexts([...live.tail, ...live.head])).toEqual([
+      "First paragraph.",
+      "Second paragraph.",
+    ]);
+
+    const result = processTimelineResponse({
+      ...baseTimelineInput,
+      currentTail: live.tail,
+      currentHead: live.head,
+      currentCursor: live.cursor ?? undefined,
+      payload: {
+        ...baseTimelineInput.payload,
+        direction: "before",
+        mergeWindow: true,
+        epoch: "epoch-1",
+        startCursor: { seq: 1 },
+        endCursor: { seq: 40 },
+        hasOlder: false,
+        hasNewer: true,
+        entries: [makeTimelineEntry(1, "oldest prompt", "user_message")],
+      },
+    });
+
+    expect(getAssistantTexts([...result.tail, ...result.head])).toEqual([
+      "First paragraph.",
+      "Second paragraph.",
+    ]);
+  });
+
   it("fills the gap between a retained prompt window and the contiguous tail", () => {
     const currentTail: StreamItem[] = [
       {
@@ -3512,6 +3555,59 @@ describe("processAgentStreamEvent", () => {
       endSeq: 5,
     });
     expect(result.sideEffects).toEqual([]);
+  });
+
+  it("publishes task snapshots only from accepted timeline events", () => {
+    const tasks = [
+      { id: "inspect", text: "Inspect", status: "in_progress" as const, completed: false },
+    ];
+    const event: AgentStreamEventPayload = {
+      type: "timeline",
+      provider: "codex",
+      item: {
+        type: "todo",
+        items: tasks,
+      },
+    };
+    const currentCursor: TimelineCursor = {
+      epoch: "epoch-1",
+      startSeq: 1,
+      endSeq: 4,
+    };
+
+    const accepted = processAgentStreamEvent({
+      ...baseStreamInput,
+      event,
+      seq: 5,
+      epoch: "epoch-1",
+      currentCursor,
+    });
+    const stale = processAgentStreamEvent({
+      ...baseStreamInput,
+      event,
+      seq: 4,
+      epoch: "epoch-1",
+      currentCursor,
+    });
+    const wrongEpoch = processAgentStreamEvent({
+      ...baseStreamInput,
+      event,
+      seq: 5,
+      epoch: "epoch-2",
+      currentCursor,
+    });
+    const gapped = processAgentStreamEvent({
+      ...baseStreamInput,
+      event,
+      seq: 8,
+      epoch: "epoch-1",
+      currentCursor,
+    });
+
+    expect(accepted.taskSnapshot).toEqual(tasks);
+    expect(stale.taskSnapshot).toBeUndefined();
+    expect(wrongEpoch.taskSnapshot).toBeUndefined();
+    expect(gapped.taskSnapshot).toBeUndefined();
   });
 
   it("detects gap and emits catch-up side effect", () => {
