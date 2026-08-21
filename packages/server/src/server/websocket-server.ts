@@ -901,7 +901,7 @@ export class VoiceAssistantWebSocketServer {
       const requestMetadata = extractSocketRequestMetadata(request);
       const protocol = extractWsBearerProtocol(request.headers["sec-websocket-protocol"]);
       const token = extractWsBearerToken(protocol);
-      const isAuthorized = isBearerTokenValid({ password, token });
+      const isAuthorized = isDirectWebSocketRequestAuthorized(request, password);
       if (!isAuthorized) {
         const reason = token === null ? "Password required" : "Incorrect password";
         this.logger.warn(
@@ -2715,10 +2715,34 @@ function resolveConnectionPeer(
 }
 
 function isLoopbackAddress(address: string): boolean {
-  const normalized = address.toLowerCase();
+  const normalized = normalizeSocketPeerAddress(address);
+  if (normalized === null) return false;
   if (normalized === "::1" || normalized === "0:0:0:0:0:0:0:1") return true;
-  const ipv4 = normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
-  return ipv4.startsWith("127.");
+  const octets = normalized.split(".");
+  return octets.length === 4 && octets.every((octet) => /^\d{1,3}$/u.test(octet)) &&
+    Number(octets[0]) === 127 && octets.every((octet) => Number(octet) <= 255);
+}
+
+function normalizeSocketPeerAddress(address: string): string | null {
+  const normalized = address.trim().toLowerCase();
+  const ipv4MappedPrefix = "::ffff:";
+  const candidate = normalized.startsWith(ipv4MappedPrefix)
+    ? normalized.slice(ipv4MappedPrefix.length)
+    : normalized;
+  if (candidate === "::1" || candidate === "0:0:0:0:0:0:0:1") return candidate;
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/u.test(candidate)) return candidate;
+  return null;
+}
+
+export function isDirectWebSocketRequestAuthorized(
+  request: IncomingMessage,
+  password: string | undefined,
+): boolean {
+  if (!password) return true;
+  const protocol = extractWsBearerProtocol(request.headers["sec-websocket-protocol"]);
+  const token = extractWsBearerToken(protocol);
+  if (token === null && isLoopbackAddress(request.socket.remoteAddress ?? "")) return true;
+  return isBearerTokenValid({ password, token });
 }
 
 function extractSocketRequestMetadata(request: unknown): SocketRequestMetadata {
