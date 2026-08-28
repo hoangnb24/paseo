@@ -63,6 +63,7 @@ function parseSentSessionMessage(data: string | ArrayBuffer | Uint8Array | undef
   draftConfig?: unknown;
   filter?: unknown;
   page?: unknown;
+  sync?: unknown;
   text?: string;
 } {
   if (typeof data !== "string") {
@@ -224,9 +225,82 @@ test("createPaseoApi borrows daemon capabilities without exposing connection own
 
   const paseo = createPaseoApi(daemonClient);
 
-  expect(Object.keys(paseo).sort()).toEqual(["agents", "config", "providers", "workspaces"]);
+  expect(Object.keys(paseo).sort()).toEqual([
+    "agents",
+    "config",
+    "projects",
+    "providers",
+    "workspaces",
+  ]);
   expect("connect" in paseo).toBe(false);
   expect("close" in paseo).toBe(false);
+  expect("skills" in paseo.agents).toBe(false);
+});
+
+test("project actions list registered projects through the existing RPC", async () => {
+  const { client, ws } = await connectClient();
+
+  const listPromise = client.projects.list({
+    requestId: "projects-list-request",
+    sync: { generation: "daemon-generation", afterSeq: 7 },
+  });
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "project.list.request",
+    requestId: "projects-list-request",
+    sync: { generation: "daemon-generation", afterSeq: 7 },
+  });
+
+  ws.message(
+    sessionMessage({
+      type: "project.list.response",
+      payload: {
+        requestId: "projects-list-request",
+        projects: [
+          {
+            projectId: "project_sdk",
+            projectKey: "sdk",
+            projectDisplayName: "SDK",
+            projectCustomName: null,
+            projectCustomIconRevision: null,
+            projectIconRevision: "icon-revision",
+            projectRootPath: "/repo/sdk",
+            projectKind: "git",
+            syncSeq: 8,
+          },
+        ],
+        sync: {
+          generation: "daemon-generation",
+          headSeq: 8,
+          mode: "changes",
+          removals: [],
+        },
+      },
+    }),
+  );
+
+  await expect(listPromise).resolves.toEqual({
+    requestId: "projects-list-request",
+    projects: [
+      {
+        projectId: "project_sdk",
+        projectKey: "sdk",
+        projectDisplayName: "SDK",
+        projectCustomName: null,
+        projectCustomIconRevision: null,
+        projectIconRevision: "icon-revision",
+        projectRootPath: "/repo/sdk",
+        projectKind: "git",
+        syncSeq: 8,
+      },
+    ],
+    sync: {
+      generation: "daemon-generation",
+      headSeq: 8,
+      mode: "changes",
+      removals: [],
+    },
+  });
+  await client.close();
 });
 
 test("agent actions list the daemon directory without exposing the low-level client", async () => {
@@ -374,6 +448,27 @@ test("workspace handles keep identity and refresh snapshots through existing dri
   );
   expect(updates).toEqual(["sdk pushed"]);
   expect(workspace.current()).toEqual(pushedWorkspace);
+
+  const titlePromise = workspace.setTitle("SDK review", "workspace-title-request");
+  expect(parseSentSessionMessage(ws.sent.at(-1))).toMatchObject({
+    type: "workspace.title.set.request",
+    requestId: "workspace-title-request",
+    workspaceId: "workspace_sdk",
+    title: "SDK review",
+  });
+  ws.message(
+    sessionMessage({
+      type: "workspace.title.set.response",
+      payload: {
+        requestId: "workspace-title-request",
+        workspaceId: "workspace_sdk",
+        accepted: true,
+        title: "SDK review",
+        error: null,
+      },
+    }),
+  );
+  await expect(titlePromise).resolves.toEqual({ title: "SDK review" });
 
   unsubscribe();
   ws.message(

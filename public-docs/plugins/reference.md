@@ -1,6 +1,6 @@
 ---
 title: Plugin reference
-description: Local plugin files, contributions, Paseo SDK access, RPCs, attachments, logs, lifecycle, hosts, and CLI commands.
+description: Local plugin files, client and server runtimes, platform limits, contributions, RPCs, lifecycle, hosts, and CLI commands.
 nav: Reference
 order: 46
 category: Plugins
@@ -11,6 +11,9 @@ category: Plugins
 Local plugins are directory sources installed into one Paseo daemon. A plugin can contribute:
 
 - React Native surfaces and sidebar items to Paseo clients;
+- workspace and agent panels opened as workspace tabs;
+- global, workspace, and agent actions in the Command Center;
+- dark themes in Settings → Appearance;
 - schema-validated RPC handlers running beside the daemon;
 - normal Paseo operations through the TypeScript SDK;
 - searchable external resources in the message composer.
@@ -24,32 +27,79 @@ Plugin code is trusted and unsandboxed. Client surfaces run in the Paseo app. Ba
 ```text
 my-plugin/
   paseo-plugin.json
-  index.tsx
+  index.ts
+  main.client.tsx
   paseo-plugin.d.ts
   package.json
   tsconfig.json
 ```
 
-The manifest contains the default plugin ID:
+The required root manifest is `paseo-plugin.json`. It contains the default plugin ID:
 
 ```json
 { "id": "my-plugin" }
 ```
 
-Plugin, surface, sidebar-item, and attachment-source IDs start with a lowercase letter and contain lowercase letters, numbers, or hyphens.
+The entry point is `index.ts` at the plugin root. Plugin, surface, sidebar-item, workspace-panel, Command Center item, and attachment-source IDs start with a lowercase letter and contain lowercase letters, numbers, or hyphens.
 
-The generated declaration file supplies `@paseo/plugin` types for local typechecking. Paseo supplies the runtime modules. Regenerate a fresh project with the matching CLI when the plugin contract changes.
+The generated declaration file supplies `@getpaseo/plugin` and `@getpaseo/plugin/server` types for local typechecking. Paseo supplies the runtime modules. Regenerate a fresh project with the matching CLI when the plugin contract changes.
+
+Add runtime-specific files as the plugin grows:
+
+```text
+my-plugin/
+  action.shared.ts
+  action.server.ts
+  panel.client.tsx
+```
+
+| Suffix         | Use it for                                                           |
+| -------------- | -------------------------------------------------------------------- |
+| `*.client.tsx` | React, React Native, hooks, styles, surfaces, panels, and callbacks. |
+| `*.server.ts`  | Node APIs, local resources, credentials, and RPC handlers.           |
+| `*.shared.ts`  | Zod RPC contracts and plain values imported by both runtimes.        |
+
+## Runtime modules
+
+Paseo builds separate client and server bundles from `index.ts`. It rejects imports from `*.server` files into client modules and imports from `*.client` files into server modules. Keep shared modules free of Node and React Native runtime code.
+
+### Client runtime
+
+Paseo provides these modules to client code:
+
+| Module                    | Use it for                              |
+| ------------------------- | --------------------------------------- |
+| `@getpaseo/plugin`        | Host UI components, hooks, and UI types |
+| `@getpaseo/plugin/server` | Shared RPC and attachment contracts     |
+| `@tanstack/react-query`   | Request state and caching               |
+| `react`                   | Components and hooks                    |
+| `react/jsx-runtime`       | Compiled JSX                            |
+| `react-native`            | Cross-platform UI                       |
+| `zod`                     | Shared schemas                          |
+
+These exact module specifiers use the host's runtime instances. A client bundle that requests another host module fails with `Module "<name>" is not available in plugin client code`.
+
+Do not import `lucide-react-native`, `react-native-svg`, or DOM libraries. Set contribution `icon` fields to a [Lucide icon name](https://lucide.dev/icons/); Paseo validates the name and renders the icon.
+
+Client components are React Native components rendered by Paseo. Web clients render them through React Native Web. Browser globals such as `localStorage` and `location` exist only when `layout.platform === "web"`; iOS and Android have no equivalent. Gate any use on that field.
+
+There is no plugin storage API. Browser storage does not persist settings across Paseo clients. There is also no general host navigation API: plugin code cannot open native Paseo routes. Command Center callbacks can only open surfaces and panels registered by the same plugin.
+
+### Server runtime
+
+Paseo provides `@getpaseo/plugin`, `@getpaseo/plugin/server`, and `zod` to server code. Backend contributions run in a daemon subprocess with Node access to the host machine. Keep filesystem, process, credential, and other machine-local work in `*.server.ts` files.
 
 ## Entry point and cleanup
 
-`index.tsx` default-exports one contribution function. It must return cleanup, even when it has nothing to clean:
+`index.ts` wires contributions together and default-exports one contribution function. It must return cleanup, even when it has nothing to clean:
 
-```tsx
-import type { PluginContext } from "@paseo/plugin";
+```ts
+import type { PluginContext } from "@getpaseo/plugin";
+import { Main } from "./main.client";
 
 export default function contribute(plugin: PluginContext) {
-  // Register contributions here.
-  return () => undefined;
+  plugin.addSurface("main", Main);
+  return () => {};
 }
 ```
 
@@ -59,13 +109,40 @@ Cleanup can be async. Release timers, watchers, sockets, and other resources cre
 
 Register a component, then point a sidebar item at its surface ID:
 
-```tsx
-import type { PluginContext, PluginSurfaceProps } from "@paseo/plugin";
-import { Text } from "react-native";
+`main.client.tsx`:
 
-function Main({ host, layout }: PluginSurfaceProps) {
-  return <Text>{`${host.label} · ${layout.platform}`}</Text>;
+```tsx
+import type { PluginSurfaceProps } from "@getpaseo/plugin";
+import { useMemo } from "react";
+import { Text, View } from "react-native";
+
+export function Main({ theme, host, layout }: PluginSurfaceProps) {
+  const styles = useMemo(
+    () => ({
+      screen: {
+        flex: 1,
+        padding: layout.compact ? 16 : 24,
+        backgroundColor: theme.colors.surface0,
+      },
+      title: { color: theme.colors.foreground },
+      detail: { color: theme.colors.foregroundMuted },
+    }),
+    [theme, layout.compact],
+  );
+  return (
+    <View style={styles.screen}>
+      <Text style={styles.title}>{host.label}</Text>
+      <Text style={styles.detail}>{layout.platform}</Text>
+    </View>
+  );
 }
+```
+
+`index.ts`:
+
+```ts
+import type { PluginContext } from "@getpaseo/plugin";
+import { Main } from "./main.client";
 
 export default function contribute(plugin: PluginContext) {
   plugin.addSurface("main", Main);
@@ -75,28 +152,338 @@ export default function contribute(plugin: PluginContext) {
     icon: "Blocks",
     surface: "main",
   });
-  return () => undefined;
+  return () => {};
 }
 ```
 
 `PluginSurfaceProps` contains:
 
-| Field    | Meaning                                                   |
-| -------- | --------------------------------------------------------- |
-| `theme`  | Paseo theme values. Validate the keys your surface reads. |
-| `host`   | Selected host `id` and display `label`.                   |
-| `layout` | `compact` and the `ios`, `android`, or `web` platform.    |
+| Field    | Meaning                                                      |
+| -------- | ------------------------------------------------------------ |
+| `theme`  | Typed `PluginTheme` color tokens for the active Paseo theme. |
+| `host`   | Selected host `id` and display `label`.                      |
+| `layout` | `compact` and the `ios`, `android`, or `web` platform.       |
 
-Paseo owns the route, header, close action, host picker, error boundary, and query client. The plugin owns the surface body. Icons use [Lucide](https://lucide.dev/icons/) names.
+Paseo owns the route, header, close action, host picker, error boundary, and query client. The plugin owns the surface body.
 
-Client code can import `react`, `react-native`, `@tanstack/react-query`, `zod`, and `@paseo/plugin`. Install them locally for typechecking; Paseo provides the client runtime instances.
+Use the host-provided `Icon` component for Lucide icons inside client surfaces. It renders the icon from Paseo's installed Lucide version, so plugin bundles do not import `lucide-react-native` or `react-native-svg`. An unknown name renders nothing instead of failing the plugin surface.
+
+```tsx
+import { Icon } from "@getpaseo/plugin";
+
+<Icon name="Settings" size={18} color={theme.colors.foreground} />;
+```
+
+Keep `Icon` in a `*.client.tsx` module.
+
+## Timeline items
+
+A plugin can replace a projected timeline entry with its own data and React Native renderer. Both
+registrations are client contributions. A matching live event refreshes the projected tail before
+replacement, so provider lifecycle deltas are never exposed as plugin items.
+
+```tsx
+import type { PluginContext, PluginTimelineItemProps } from "@getpaseo/plugin";
+import { Text } from "react-native";
+import { z } from "zod";
+
+const schema = z.object({ label: z.string() });
+
+function Card({ item, theme }: PluginTimelineItemProps<z.output<typeof schema>>) {
+  return <Text style={{ color: theme.colors.foreground }}>{item.data.label}</Text>;
+}
+
+export default function contribute(plugin: PluginContext) {
+  plugin.addTimelineTransformer({
+    id: "command-card",
+    query: { itemType: "tool_call" },
+    transform({ item }) {
+      if (item.status === "running") return;
+      return {
+        items: [
+          {
+            type: "plugin",
+            kind: "command-card",
+            version: 1,
+            data: { label: item.name },
+          },
+        ],
+      };
+    },
+  });
+  plugin.addTimelineRenderer({
+    kind: "command-card",
+    version: 1,
+    schema,
+    Component: Card,
+  });
+  return () => {};
+}
+```
+
+`query.itemType` is the stable, coarse selector. Inspect the selected item inside `transform` for
+provider- or tool-specific recognition. Returning `undefined` keeps the original entry. Returning
+`items` replaces it; an empty array removes it. Item `data` must be JSON-compatible.
+
+Renderers receive `agentId`, `item`, `timestamp`, `theme`, `host`, and `layout`. Paseo validates
+`item.data` with the registered schema before rendering. Keep transformers synchronous and
+deterministic because Paseo reruns them while reconciling projected history.
+
+## Theme and layout
+
+Plugin UI runs on desktop, browser, iOS, and Android, across every Paseo theme. `theme` is a typed `PluginTheme` mapped from the active host theme. Color and spacing must come from those props. Hardcoded colors and unstyled `Text` break when the host theme changes.
+
+Recreate styles when `theme` or `layout.compact` changes.
+
+| Key                             | Required for               | Use it for                          |
+| ------------------------------- | -------------------------- | ----------------------------------- |
+| `theme.colors.foreground`       | Every primary `Text`       | Titles and body copy                |
+| `theme.colors.foregroundMuted`  | Secondary `Text`           | Labels and supporting copy          |
+| `theme.colors.surface0`         | Root view                  | Panel background                    |
+| `theme.colors.surface1`         | Raised surfaces            | Cards and panels                    |
+| `theme.colors.surface2`         | Control surfaces           | Inputs and secondary controls       |
+| `theme.colors.border`           | Surface boundaries         | Borders and dividers                |
+| `theme.colors.accent`           | Primary action fills       | Buttons and selected states         |
+| `theme.colors.accentForeground` | Text on an accent fill     | Button labels                       |
+| `theme.colors.statusSuccess`    | Success feedback           | Success messages and indicators     |
+| `theme.colors.statusWarning`    | Warning feedback           | Warning messages and indicators     |
+| `theme.colors.statusDanger`     | Failure copy               | Error messages and destructive text |
+| `layout.compact`                | Padding and stacking       | `true` on mobile and narrow windows |
+| `layout.platform`               | Platform-specific behavior | `ios`, `android`, or `web`          |
+
+Do not hardcode `#000`, `#fff`, or React Native's default text color. Primary copy uses `foreground`. Labels use `foregroundMuted`. Tighten padding when `layout.compact` is true.
+
+Workspace and agent panels receive the same `theme` and `layout` fields.
+
+## Contribute a theme
+
+`addTheme` adds a light or dark theme to Settings → Appearance, listed under the built-ins by its `name`. A
+theme is data, so it needs no client file:
+
+```ts
+import type { PluginContext } from "@getpaseo/plugin";
+
+export default function contribute(plugin: PluginContext) {
+  plugin.addTheme({
+    id: "mocha",
+    name: "Catppuccin Mocha",
+    appearance: "dark",
+    colors: {
+      background: "#1e1e2e",
+      foreground: "#cdd6f4",
+      raised: "#313244",
+      control: "#45475a",
+      border: "#45475a",
+      accent: "#cba6f7",
+      mutedForeground: "#a6adc8",
+      ring: "#6c7086",
+    },
+  });
+  return () => {};
+}
+```
+
+Every color is a hex string; anything else fails to load. Paseo expands the palette into the full
+token set the built-in dark themes use, so a contributed theme covers panels, menus, diffs, status
+colors, and the terminal without listing them.
+
+| Color             | Becomes                                                           |
+| ----------------- | ----------------------------------------------------------------- |
+| `background`      | App, workspace, and terminal background                           |
+| `foreground`      | Primary text, terminal foreground and cursor                      |
+| `raised`          | Cards, popovers, and hovered rows                                 |
+| `control`         | Inputs, secondary fills, and the light-theme sidebar              |
+| `border`          | Borders and the highest raised-surface tint                       |
+| `accent`          | Buttons, selection, and focus. Optional; `foreground` if omitted. |
+| `mutedForeground` | Secondary text                                                    |
+| `ring`            | Focus rings, scrollbars, and terminal bright black                |
+
+`appearance` is `"light"` or `"dark"`. Paseo uses it to select the matching surface, status,
+diff, syntax, terminal, and shadow derivation.
+
+Only one contributed theme is active at a time. Selecting one persists the choice; if the plugin is
+later disabled or removed, Paseo falls back to the default theme rather than leaving the app
+unpainted.
+
+Themes need a host that supports them. A daemon released before `addTheme` compiles the call into
+the plugin's backend bundle, where it does not exist, and the plugin fails to start with
+`plugin.addTheme is not a function`. Update the host.
+
+## Workspace panels
+
+Register one panel for workspace or agent context:
+
+`review.client.tsx`:
+
+```tsx
+import { type PluginAgentPanelProps, useAgent, useWorkspace } from "@getpaseo/plugin";
+import { useMemo } from "react";
+import { Text, View } from "react-native";
+
+export function ReviewPanel({ theme, layout, workspaceId, agentId }: PluginAgentPanelProps) {
+  const workspaceName = useWorkspace(workspaceId, (workspace) => workspace.name);
+  const agent = useAgent(agentId, ({ id, title }) => ({ id, title }));
+  const styles = useMemo(
+    () => ({
+      screen: {
+        flex: 1,
+        padding: layout.compact ? 16 : 24,
+        backgroundColor: theme.colors.surface0,
+      },
+      title: { color: theme.colors.foreground },
+      detail: { color: theme.colors.foregroundMuted },
+    }),
+    [theme, layout.compact],
+  );
+  return (
+    <View style={styles.screen}>
+      <Text style={styles.title}>{workspaceName}</Text>
+      <Text style={styles.detail}>{agent?.title ?? agent?.id}</Text>
+    </View>
+  );
+}
+```
+
+`index.ts`:
+
+```ts
+import type { PluginContext } from "@getpaseo/plugin";
+import { ReviewPanel } from "./review.client";
+
+export default function contribute(plugin: PluginContext) {
+  plugin.addWorkspacePanel({
+    id: "review",
+    title: "Review",
+    icon: "Scan",
+    context: "agent",
+    locations: ["workspace", "explorer"],
+    Component: ReviewPanel,
+  });
+  return () => {};
+}
+```
+
+`addWorkspacePanel` fields:
+
+| Field       | Required | Meaning                                                       |
+| ----------- | -------- | ------------------------------------------------------------- |
+| `id`        | Yes      | Plugin-local panel ID.                                        |
+| `title`     | Yes      | Workspace-tab title.                                          |
+| `icon`      | Yes      | Lucide icon name.                                             |
+| `context`   | Yes      | `workspace` or `agent`.                                       |
+| `locations` | No       | `workspace` and/or `explorer`. Defaults to `workspace`.       |
+| `Component` | Yes      | React Native component matching the selected context's props. |
+
+A workspace panel receives `PluginWorkspacePanelProps`: `context: "workspace"`, `theme`, `host`, `layout`, and `workspaceId`. An agent panel receives `PluginAgentPanelProps`: `context: "agent"`, the same common fields and `workspaceId`, plus `agentId`.
+
+Read cached state with `useWorkspace(workspaceId, selector)` and `useAgent(agentId, selector)`. A selector is required. Paseo compares its result shallowly, so selecting `{ name, status }` does not re-render when unrelated fields change. Select every field the component renders in one call; do not select the whole snapshot.
+
+Both hooks return `null` when the record is unavailable. Otherwise they run synchronously against normalized client state. Snapshot DTOs and their nested values are deeply readonly and frozen at runtime. Do not call plugin RPC to discover the current workspace or agent. Fetch optional or vendor-specific enrichment after the component renders.
+
+Workspace snapshot fields:
+
+| Field                | Type                                                              |
+| -------------------- | ----------------------------------------------------------------- |
+| `id`                 | `string`                                                          |
+| `projectId`          | `string`                                                          |
+| `projectDisplayName` | `string`                                                          |
+| `projectRootPath`    | `string`                                                          |
+| `directory`          | `string`                                                          |
+| `projectKind`        | `"git" \| "non_git" \| "directory"`                               |
+| `kind`               | `"directory" \| "local_checkout" \| "checkout" \| "worktree"`     |
+| `name`               | `string`                                                          |
+| `title`              | `string \| null`                                                  |
+| `status`             | `"needs_input" \| "failed" \| "running" \| "attention" \| "done"` |
+| `statusEnteredAt`    | ISO timestamp or `null`                                           |
+| `archivingAt`        | ISO timestamp or `null`                                           |
+| `diffStat`           | `{ additions: number; deletions: number } \| null`                |
+
+Agent snapshot fields:
+
+| Field               | Type                                                           |
+| ------------------- | -------------------------------------------------------------- |
+| `id`                | `string`                                                       |
+| `workspaceId`       | `string`                                                       |
+| `provider`          | `string`                                                       |
+| `status`            | `"initializing" \| "idle" \| "running" \| "error" \| "closed"` |
+| `createdAt`         | ISO timestamp                                                  |
+| `updatedAt`         | ISO timestamp                                                  |
+| `lastActivityAt`    | ISO timestamp                                                  |
+| `title`             | `string \| null`                                               |
+| `cwd`               | `string`                                                       |
+| `model`             | `string \| null`                                               |
+| `currentModeId`     | `string \| null`                                               |
+| `thinkingOptionId`  | `string \| null`                                               |
+| `requiresAttention` | `boolean`                                                      |
+| `attentionReason`   | `"finished" \| "error" \| "permission" \| null`                |
+| `parentAgentId`     | `string \| null`                                               |
+| `labels`            | `Record<string, string>`                                       |
+
+Paseo owns tab focus, splitting, closing, persistence, query state, the API/RPC providers, and the render error boundary. A restored tab whose plugin, panel, context, workspace, or agent is unavailable stays open with an unavailable message instead of crashing the workspace.
+
+## Command Center items
+
+Open the Command Center with **⌘K** on macOS or **Ctrl+K** on Windows and Linux, then search for the item title.
+
+Register an action and open a panel from the callback:
+
+```tsx
+import { defineRpc } from "@getpaseo/plugin/server";
+import { z } from "zod";
+
+const refreshReview = defineRpc({
+  name: "review.refresh",
+  input: z.object({ agentId: z.string() }),
+  output: z.object({ refreshed: z.boolean() }),
+});
+
+plugin.addCommandCenterItem({
+  id: "open-review",
+  title: "Open review",
+  icon: "Scan",
+  keywords: ["inspect"],
+  context: "agent",
+  async onSelect({ paseo, rpc, workspace, agent, openPanel }) {
+    await paseo.workspaces.ref(workspace.id).setTitle(`Review ${agent.id}`);
+    await rpc(refreshReview, { agentId: agent.id });
+    openPanel("review");
+  },
+});
+```
+
+`addCommandCenterItem` fields:
+
+| Field      | Required | Meaning                                        |
+| ---------- | -------- | ---------------------------------------------- |
+| `id`       | Yes      | Plugin-local item ID.                          |
+| `title`    | Yes      | Search result title.                           |
+| `icon`     | Yes      | Lucide icon name.                              |
+| `keywords` | No       | Additional Command Center search terms.        |
+| `context`  | Yes      | `global`, `workspace`, or `agent`.             |
+| `onSelect` | Yes      | Client-side callback for the matching context. |
+
+Global items appear on the installation's selected host. Workspace items appear only when that host has an active cached workspace. Agent items appear only when the focused workspace tab is an agent or an agent-context plugin panel whose cached record belongs to that workspace. Missing context removes the item rather than calling the plugin to discover it.
+
+Every callback receives:
+
+| Field                     | Context             | Meaning                                                                                                         |
+| ------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `context`                 | All                 | Matching discriminator.                                                                                         |
+| `paseo`                   | All                 | Selected host's existing `PaseoApi`.                                                                            |
+| `rpc(contract, input)`    | All                 | Typed call to this installation's daemon-side plugin handler.                                                   |
+| `openSurface(id)`         | All                 | Opens one of this plugin's registered global surfaces.                                                          |
+| `workspace`               | Workspace and agent | Synchronous workspace snapshot.                                                                                 |
+| `agent`                   | Agent               | Synchronous matching agent snapshot.                                                                            |
+| `openPanel(id, options?)` | Workspace and agent | Opens a registered panel in the callback's current context. Pass `{ location: "explorer" }` to target Explorer. |
+
+An agent callback may open either an agent panel or a workspace panel. A workspace callback may open only a workspace panel. Unknown surface and panel IDs fail visibly. Use `paseo` for normal workspace, agent, provider, and daemon-config operations. Use `rpc` for plugin-specific filesystem, credential, vendor, or daemon-local work.
 
 ## Use the Paseo SDK
 
 Use `usePaseo()` for ordinary Paseo operations from a surface. It borrows the selected host's existing connection; do not create another client.
 
 ```tsx
-import { usePaseo } from "@paseo/plugin";
+import { usePaseo } from "@getpaseo/plugin";
 import { Pressable, Text } from "react-native";
 
 function PullRequestAction() {
@@ -126,7 +513,7 @@ function PullRequestAction() {
 }
 ```
 
-The returned API covers workspaces, agents, providers, and daemon config. See the [SDK API reference](/docs/sdk/reference) for its methods. Connection lifecycle methods are intentionally absent because Paseo owns the connection.
+The returned API covers projects, workspaces, agents, providers, and daemon config. See the [SDK API reference](/docs/sdk/reference) for its methods. Connection lifecycle methods are intentionally absent because Paseo owns the connection.
 
 ## Add plugin-specific backend behavior
 
@@ -134,29 +521,55 @@ Use plugin RPC only for work that is not a normal Paseo operation: reading a ven
 
 Define one contract with Zod, handle it in the subprocess, and call it from the surface:
 
-```tsx
-import { defineRpc, type PluginContext, useRpc } from "@paseo/plugin";
+`greeting.shared.ts`:
+
+```ts
+import { defineRpc } from "@getpaseo/plugin/server";
 import { z } from "zod";
 
-const greeting = defineRpc({
+export const greeting = defineRpc({
   name: "greeting.create",
   input: z.object({ name: z.string() }),
   output: z.object({ message: z.string() }),
 });
+```
 
-function GreetingButton() {
+`greeting.client.tsx`:
+
+```tsx
+import { useRpc } from "@getpaseo/plugin";
+import { greeting } from "./greeting.shared";
+
+export function GreetingButton() {
   const createGreeting = useRpc(greeting);
   // Call createGreeting({ name: "Ada" }) from an event or query.
   return null;
 }
+```
+
+`greeting.server.ts`:
+
+```ts
+import type { output as ZodOutput } from "zod";
+import { greeting } from "./greeting.shared";
+
+export function createGreeting({ name }: ZodOutput<typeof greeting.input>) {
+  return { message: `Hello, ${name}` };
+}
+```
+
+`index.ts`:
+
+```ts
+import type { PluginContext } from "@getpaseo/plugin";
+import { GreetingButton } from "./greeting.client";
+import { createGreeting } from "./greeting.server";
+import { greeting } from "./greeting.shared";
 
 export default function contribute(plugin: PluginContext) {
-  plugin.handle(greeting, async ({ name }, { paseo }) => {
-    const { config } = await paseo.config.get();
-    return { message: `${name}: plugins are ${config.pluginsEnabled ? "on" : "off"}` };
-  });
+  plugin.handle(greeting, createGreeting);
   plugin.addSurface("main", GreetingButton);
-  return () => undefined;
+  return () => {};
 }
 ```
 
@@ -173,8 +586,11 @@ console.log("Refreshing issues");
 console.error("Issue refresh failed", error);
 ```
 
-Paseo captures output emitted during initialization, RPC handlers, cleanup, and process failure.
-Protocol traffic uses a separate channel, so `console.log()` cannot corrupt plugin RPCs.
+Paseo adds `[paseo]` entries when the plugin starts loading, becomes ready, starts stopping, and has
+stopped. It records compilation and load failures as stderr entries, including failures that happen
+before the plugin subprocess starts. Paseo also captures output emitted during initialization, RPC
+handlers, cleanup, and process failure. Protocol traffic uses a separate channel, so `console.log()`
+cannot corrupt plugin RPCs.
 
 Open **Settings → Plugins → Logs** for the plugin, or inspect the same recent tail from the daemon
 CLI:
@@ -190,9 +606,9 @@ the command again for newer entries. Each entry includes its timestamp, stdout o
 sequence, and message.
 
 Paseo retains up to 500 entries and 256 KiB per plugin in memory. Individual lines are capped at
-16 KiB. Reload, disable, initialization failure, and process failure retain the tail. Removing the
-plugin clears it, and a daemon restart starts a new tail. Structured copies are also written to the
-daemon log at `$PASEO_HOME/daemon.log`.
+16 KiB. Reload, disable, compilation failure, initialization failure, and process failure retain the
+tail. Removing the plugin clears it, and a daemon restart starts a new tail. Structured copies are
+also written to the daemon log at `$PASEO_HOME/daemon.log`.
 
 Only daemon-side output is captured. Logs from client surfaces remain in the app runtime. Do not log
 credentials, access tokens, or other secrets: connected users can read the retained tail, and the
@@ -202,11 +618,13 @@ daemon log persists it.
 
 An attachment source searches external resources and returns a stable text snapshot for an agent prompt. Keep credentials and vendor calls in the backend handler.
 
-```tsx
-import { defineAttachmentSource, defineRpc, type PluginContext } from "@paseo/plugin";
+`issues.shared.ts`:
+
+```ts
+import { defineAttachmentSource, defineRpc } from "@getpaseo/plugin/server";
 import { z } from "zod";
 
-const searchIssues = defineRpc({
+export const searchIssues = defineRpc({
   name: "issues.search",
   input: z.object({ query: z.string() }),
   output: z.object({
@@ -224,7 +642,7 @@ const searchIssues = defineRpc({
   }),
 });
 
-const issues = defineAttachmentSource({
+export const issues = defineAttachmentSource({
   id: "issues",
   title: "Acme issue",
   icon: "CircleDot",
@@ -232,11 +650,30 @@ const issues = defineAttachmentSource({
   searchPlaceholder: "Search by identifier or title",
   search: searchIssues,
 });
+```
+
+`issues.server.ts`:
+
+```ts
+import type { output as ZodOutput } from "zod";
+import { searchIssues } from "./issues.shared";
+
+export function search({ query }: ZodOutput<typeof searchIssues.input>) {
+  return searchAcmeIssues(query);
+}
+```
+
+`index.ts`:
+
+```ts
+import type { PluginContext } from "@getpaseo/plugin";
+import { search } from "./issues.server";
+import { issues, searchIssues } from "./issues.shared";
 
 export default function contribute(plugin: PluginContext) {
-  plugin.handle(searchIssues, ({ query }) => searchAcmeIssues(query));
+  plugin.handle(searchIssues, search);
   plugin.addAttachmentSource(issues);
-  return () => undefined;
+  return () => {};
 }
 ```
 
@@ -248,12 +685,24 @@ Plugins are installed per daemon. When the same contribution exists on several c
 
 Attachment sources remain scoped to each composer's host.
 
+Workspace panels and Command Center items stay scoped to the active host and exact cached context.
+Reload replaces their registrations. Disable, removal, host disconnect, and evaluation failure
+remove Command Center items and clear the installation's query state. An already-restored panel tab
+remains as unavailable until its matching contribution returns or the user closes it. Panel render
+failures stay inside the plugin error boundary.
+
 ## CLI reference
 
 ```bash
 paseo plugin init /absolute/path/to/plugin
 paseo plugin install /absolute/path/to/plugin
 paseo plugin install /absolute/path/to/plugin --id another-runtime-id
+paseo plugin add owner/repository
+paseo plugin add https://git.example.com/owner/repository.git --ref main
+paseo plugin add owner/monorepo --path plugins/review
+paseo plugin status [id]
+paseo plugin update <id>
+paseo plugin update --all
 paseo plugin ls
 paseo plugin reload my-plugin
 paseo plugin logs my-plugin
@@ -262,7 +711,14 @@ paseo plugin enable my-plugin
 paseo plugin remove my-plugin
 ```
 
-Pass `--host <url>` to management commands when the target is not the CLI's default daemon. `remove` deletes only the daemon configuration; it never deletes the source directory. The install-time `--id` is the runtime ID and allows the same directory to be installed more than once.
+Pass `--host <url>` to management commands when the target is not the CLI's default daemon. `remove`
+never deletes a directory source; it deletes the managed checkout for a Git source. The install-time
+`--id` is the runtime ID and allows the same directory or repository to be installed more than once.
+
+An existing directory wins over `owner/repository` GitHub shorthand. Omit `--ref` to track the
+default branch. Explicit branches track updates; tags and commits stay pinned. Git installation
+runs no package manager and no install scripts. `update` validates and compiles the candidate before
+activation, then restores the installed commit if startup fails.
 
 Run `npm run typecheck` before install or reload. Never edit the daemon config directly.
 

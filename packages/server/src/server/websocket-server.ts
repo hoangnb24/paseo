@@ -98,6 +98,7 @@ import {
 import type { BrowserToolsBroker } from "./browser-tools/broker.js";
 import type { DaemonRuntimeConfig } from "./session/daemon/daemon-session.js";
 import { DirectorySyncService } from "./directory-sync/index.js";
+import type { WorkspaceLabelService } from "./workspace-labels/index.js";
 import {
   APPLICATION_SOCKET_LEASE_CHECK_INTERVAL_MS,
   ApplicationSocketLease,
@@ -551,6 +552,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly agentStorage: AgentStorage;
   private readonly projectRegistry: ProjectRegistry;
   private readonly workspaceRegistry: WorkspaceRegistry;
+  private readonly workspaceLabelService: WorkspaceLabelService | null;
   private readonly scheduleService: ScheduleService;
   private readonly checkoutDiffManager: CheckoutDiffManager;
   private readonly github: ForgeService;
@@ -602,6 +604,7 @@ export class VoiceAssistantWebSocketServer {
   private readonly advertiseRelayConfig: boolean;
   private readonly directorySync = new DirectorySyncService();
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
+  private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
 
   constructor(
     server: HTTPServer,
@@ -647,6 +650,8 @@ export class VoiceAssistantWebSocketServer {
     hubRelationships?: HubRelationshipManagement | null,
     workspaceSetupRuntime: WorkspaceSetupRuntime = new WorkspaceSetupRuntime(),
     pluginRuntime?: SessionOptions["pluginRuntime"],
+    orchestrationSkills?: SessionOptions["orchestrationSkills"],
+    workspaceLabelService?: WorkspaceLabelService,
   ) {
     this.logger = logger.child({ module: "websocket-server" });
     this.workspaceSetupRuntime = workspaceSetupRuntime;
@@ -662,10 +667,12 @@ export class VoiceAssistantWebSocketServer {
     this.browserToolsBroker = browserToolsBroker ?? null;
     this.hubRelationships = hubRelationships ?? null;
     this.pluginRuntime = pluginRuntime;
+    this.orchestrationSkills = orchestrationSkills;
     this.agentManager = agentManager;
     this.agentStorage = agentStorage;
     this.projectRegistry = projectRegistry ?? createNoopProjectRegistry();
     this.workspaceRegistry = workspaceRegistry ?? createNoopWorkspaceRegistry();
+    this.workspaceLabelService = workspaceLabelService ?? null;
     const requiredServices = requireWebSocketServices({
       scheduleService,
       checkoutDiffManager,
@@ -1425,6 +1432,7 @@ export class VoiceAssistantWebSocketServer {
       agentStorage: this.agentStorage,
       projectRegistry: this.projectRegistry,
       workspaceRegistry: this.workspaceRegistry,
+      workspaceLabelService: this.workspaceLabelService ?? undefined,
       directorySync: this.directorySync,
       scheduleService: this.scheduleService,
       checkoutDiffManager: this.checkoutDiffManager,
@@ -1433,6 +1441,7 @@ export class VoiceAssistantWebSocketServer {
       workspaceAutoName: this.workspaceAutoName,
       daemonConfigStore: this.daemonConfigStore,
       pluginRuntime: this.pluginRuntime,
+      orchestrationSkills: this.orchestrationSkills,
       mcpBaseUrl: this.mcpBaseUrl,
       stt: () => this.speech?.resolveStt() ?? null,
       sttLanguage: this.speech?.resolveSttLanguage() ?? "en",
@@ -1639,19 +1648,31 @@ export class VoiceAssistantWebSocketServer {
       features: {
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
         directorySync: true,
+        // COMPAT(workspaceLabels): added in v0.5.0, remove after 2027-08-14.
+        ...(this.workspaceLabelService ? { workspaceLabels: true } : {}),
         // COMPAT(providersSnapshot): keep optional until all clients rely on snapshot flow.
         providersSnapshot: true,
         // COMPAT(providersSnapshotCwd): added in v0.3.2, remove gate after 2027-02-10.
         providersSnapshotCwd: true,
-        // COMPAT(checkoutForgeSetAutoMerge): added in v0.1.106, remove old
-        // checkoutGithubSetAutoMerge fallback after 2026-12-28.
+        // COMPAT(checkoutForgeSetAutoMerge): added in v0.2.0-beta.1. Remove the
+        // feature gate and legacy fallback after 2027-01-17 once the supported
+        // daemon floor is >= v0.2.0.
         checkoutForgeSetAutoMerge: true,
-        // COMPAT(checkoutGithubSetAutoMerge): added in v0.1.75, remove gate after 2026-11-13.
+        // COMPAT(checkoutGithubSetAutoMerge): added in v0.1.75 and retained as
+        // the fallback for checkoutForgeSetAutoMerge. Stop advertising it after
+        // 2027-01-17 once supported floors are >= v0.2.0.
         checkoutGithubSetAutoMerge: true,
+        // COMPAT(githubCheckDetails): added in v0.1.92 and retained as the
+        // fallback for forgeCheckDetails. Stop advertising it after 2027-01-17
+        // once supported floors are >= v0.2.0.
         githubCheckDetails: true,
-        // COMPAT(forgeCheckDetails): added in v0.1.106, remove githubCheckDetails fallback after 2026-12-28.
+        // COMPAT(forgeCheckDetails): added in v0.2.0-beta.1. Remove the feature
+        // gate and legacy fallback after 2027-01-17 once the supported daemon
+        // floor is >= v0.2.0.
         forgeCheckDetails: true,
-        // COMPAT(forgeSearch): added in v0.1.106, remove github_search fallback after 2026-12-28.
+        // COMPAT(forgeSearch): added in v0.2.0-beta.1. Remove the feature gate
+        // and legacy fallback after 2027-01-17 once the supported daemon floor
+        // is >= v0.2.0.
         forgeSearch: true,
         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
         ...(this.advertiseDaemonStatusRpc ? { daemonStatusRpc: true } : {}),
@@ -1664,7 +1685,12 @@ export class VoiceAssistantWebSocketServer {
         // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
         plugins: true,
         pluginManagement: true,
+        pluginGitManagement: true,
         pluginLogs: true,
+        // COMPAT(pluginThemes): added in v0.5.0, remove gate after 2027-08-20.
+        pluginThemes: true,
+        // COMPAT(skillManagement): added in v0.4.0, remove gate after 2027-08-16.
+        skillManagement: true,
         // COMPAT(terminalRestoreModes): added in v0.1.81, remove gate after 2026-11-23.
         "terminal-restore-modes": true,
         // COMPAT(terminalInputModeReplay): added in v0.2.6, remove gate after 2027-02-02.
@@ -1729,7 +1755,8 @@ export class VoiceAssistantWebSocketServer {
         providerScopedPaseoTools: true,
         // COMPAT(importSessionWorkspaceTarget): added in v0.1.110, remove gate after 2027-01-16.
         importSessionWorkspaceTarget: true,
-        // COMPAT(forgeProviders): added in v0.1.106, drop the gate when daemon floor >= v0.1.106.
+        // COMPAT(forgeProviders): added in v0.2.0-beta.1. Drop the gate after
+        // 2027-01-17 once the supported daemon floor is >= v0.2.0.
         forgeProviders: true,
         // COMPAT(selectiveAgentTimeline): added in v0.1.106, remove after 2027-01-12.
         selectiveAgentTimeline: true,
