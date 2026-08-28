@@ -977,6 +977,8 @@ export const ko: TranslationResources = {
       },
       show: {
         label: "표시 항목",
+        branch: "브랜치",
+        project: "프로젝트",
         host: "호스트",
         changeRequest: "풀 리퀘스트",
         checks: "검사",
@@ -1421,6 +1423,7 @@ export const ko: TranslationResources = {
     defaultModel: "기본값",
     profiles: "프로필",
     providers: "제공자",
+    model: "모델",
     editProfiles: "편집",
     editProfilesLabel: "에이전트 프로필 편집",
     createProfile: "프로필 만들기",

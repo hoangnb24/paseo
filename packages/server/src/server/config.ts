@@ -507,6 +507,12 @@ function resolveBrowserToolsEnabled(persisted: ReturnType<typeof loadPersistedCo
   return persisted.daemon?.browserTools?.enabled ?? false;
 }
 
+function resolveMcpInjectIntoProviders(
+  persisted: ReturnType<typeof loadPersistedConfig>,
+): string[] | undefined {
+  return persisted.daemon?.mcp?.injectIntoProviders;
+}
+
 /**
  * Both profile lists stay `undefined` when absent rather than defaulting to an
  * empty array: for terminal profiles that is what selects the built-in
@@ -517,12 +523,6 @@ function resolveProfileLists(persisted: ReturnType<typeof loadPersistedConfig>) 
     terminalProfiles: persisted.daemon?.terminalProfiles,
     agentProfiles: persisted.daemon?.agentProfiles,
   };
-}
-
-function resolveMcpInjectIntoProviders(
-  persisted: ReturnType<typeof loadPersistedConfig>,
-): string[] | undefined {
-  return persisted.daemon?.mcp?.injectIntoProviders;
 }
 
 function resolveStaticLoadConfigSettings(

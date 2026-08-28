@@ -124,16 +124,14 @@ describe("daemon bearer auth", () => {
     }
   });
 
-  test("closes WebSocket connections with readable auth failures when password is configured", async () => {
+  test("allows local omission but still validates supplied WebSocket passwords", async () => {
     const daemonHandle = await createTestPaseoDaemon({
       auth: { password: CORRECT_PASSWORD_HASH },
     });
     try {
-      await expectWebSocketCloses({
-        port: daemonHandle.port,
-        code: 4401,
-        reason: "Password required",
-      });
+      const local = await connectWebSocket({ port: daemonHandle.port });
+      expect(local.protocol).toBe("");
+      local.ws.close();
       await expectWebSocketCloses({
         port: daemonHandle.port,
         protocol: "paseo.bearer.wrong-password",

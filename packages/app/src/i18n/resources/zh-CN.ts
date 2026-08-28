@@ -962,6 +962,8 @@ export const zhCN: TranslationResources = {
       },
       show: {
         label: "显示",
+        branch: "分支",
+        project: "项目",
         host: "主机",
         changeRequest: "拉取请求",
         checks: "检查",
@@ -1394,6 +1396,7 @@ export const zhCN: TranslationResources = {
     defaultModel: "默认",
     profiles: "配置文件",
     providers: "提供方",
+    model: "模型",
     editProfiles: "编辑",
     editProfilesLabel: "编辑智能体配置文件",
     createProfile: "创建配置文件",

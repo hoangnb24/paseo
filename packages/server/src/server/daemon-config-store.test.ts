@@ -8,6 +8,12 @@ import { loadPersistedConfig } from "./persisted-config.js";
 import type { PersistedConfig } from "./persisted-config.js";
 import type { MutableDaemonConfig } from "@getpaseo/protocol/messages";
 
+function readProviderToolAllowlist(
+  persisted: PersistedConfig,
+): MutableDaemonConfig["mcp"]["injectIntoProviders"] {
+  return persisted.daemon?.mcp?.injectIntoProviders;
+}
+
 function reloadableConfig(
   persisted: PersistedConfig,
   options: { relayEnabledFallback?: boolean } = {},
@@ -20,7 +26,11 @@ function reloadableConfig(
     relay: {
       enabled: relay.enabled ?? options.relayEnabledFallback ?? true,
     },
-    mcp: { enabled: true, injectIntoAgents: false },
+    mcp: {
+      enabled: true,
+      injectIntoAgents: false,
+      injectIntoProviders: readProviderToolAllowlist(persisted),
+    },
     browserTools: { enabled: daemon.browserTools?.enabled ?? false },
     providers: (agents.providers ?? {}) as MutableDaemonConfig["providers"],
     metadataGeneration: { providers: agents.metadataGeneration?.providers ?? [] },
@@ -36,6 +46,8 @@ function reloadableConfig(
       maxProcessConcurrency: git.maxProcessConcurrency ?? 8,
     },
     app: { baseUrl: "https://app.paseo.sh" },
+    pluginsEnabled: persisted.pluginsEnabled ?? false,
+    plugins: persisted.plugins ?? {},
   };
 }
 
@@ -116,6 +128,43 @@ describe("DaemonConfigStore", () => {
 
     expect(changes).toEqual([true]);
     expect(loadPersistedConfig(paseoHome).daemon?.relay?.enabled).toBe(true);
+  });
+
+  test("patch can set and reset the provider injection allowlist", () => {
+    const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-"));
+    tempDirs.push(paseoHome);
+    const store = new DaemonConfigStore(paseoHome, {
+      mcp: { injectIntoAgents: true },
+      browserTools: { enabled: false },
+      providers: {},
+      metadataGeneration: { providers: [] },
+      autoArchiveAfterMerge: false,
+      enableTerminalAgentHooks: false,
+      appendSystemPrompt: "",
+    });
+    const changes: unknown[] = [];
+    store.onFieldChange("mcp.injectIntoProviders", (value) => changes.push(value));
+
+    store.patch({
+      mcp: { injectIntoProviders: ["codex-supervisor", "codex-lead"] },
+    });
+
+    expect(changes).toEqual([["codex-supervisor", "codex-lead"]]);
+    expect(loadPersistedConfig(paseoHome).daemon?.mcp).toEqual({
+      injectIntoProviders: ["codex-supervisor", "codex-lead"],
+    });
+
+    store.patch({ mcp: { injectIntoProviders: [] } });
+
+    expect(loadPersistedConfig(paseoHome).daemon?.mcp).toEqual({
+      injectIntoProviders: [],
+    });
+
+    const reset = store.patch({ mcp: { injectIntoProviders: null } });
+
+    expect(reset.mcp).toEqual({ injectIntoAgents: true });
+    expect(changes).toEqual([["codex-supervisor", "codex-lead"], [], undefined]);
+    expect(loadPersistedConfig(paseoHome).daemon?.mcp).toBeUndefined();
   });
 
   test("patch round-trips agent profiles through the strictly-parsed persisted config", () => {
@@ -209,17 +258,20 @@ describe("DaemonConfigStore", () => {
 
     expect(changes).toEqual([["codex-supervisor", "codex-lead"]]);
     expect(loadPersistedConfig(paseoHome).daemon?.mcp).toEqual({
-      injectIntoAgents: true,
       injectIntoProviders: ["codex-supervisor", "codex-lead"],
+    });
+
+    store.patch({ mcp: { injectIntoProviders: [] } });
+
+    expect(loadPersistedConfig(paseoHome).daemon?.mcp).toEqual({
+      injectIntoProviders: [],
     });
 
     const reset = store.patch({ mcp: { injectIntoProviders: null } });
 
     expect(reset.mcp).toEqual({ injectIntoAgents: true });
-    expect(changes).toEqual([["codex-supervisor", "codex-lead"], undefined]);
-    expect(loadPersistedConfig(paseoHome).daemon?.mcp).toEqual({
-      injectIntoAgents: true,
-    });
+    expect(changes).toEqual([["codex-supervisor", "codex-lead"], [], undefined]);
+    expect(loadPersistedConfig(paseoHome).daemon?.mcp).toBeUndefined();
   });
 
   test("rolls back config when a field transition fails", () => {
@@ -972,6 +1024,60 @@ describe("DaemonConfigStore reload", () => {
     });
     expect(store.get().browserTools.enabled).toBe(true);
     expect(store.get().git).toEqual({ maxProcessesPerSecond: 12, maxProcessConcurrency: 3 });
+  });
+
+  test("reload applies and removes the provider tool allowlist", () => {
+    const { paseoHome, store, persisted } = createReloadableStore();
+    const changes: unknown[] = [];
+    store.onFieldChange("mcp.injectIntoProviders", (value) => changes.push(value));
+
+    writeConfig(paseoHome, {
+      ...persisted,
+      daemon: {
+        ...persisted.daemon,
+        mcp: { ...persisted.daemon?.mcp, injectIntoProviders: ["codex-lead"] },
+      },
+    });
+    expect(store.reload()).toEqual({
+      appliedPaths: ["daemon.mcp.injectIntoProviders"],
+      restartRequiredPaths: [],
+      overrideControlledPaths: [],
+    });
+    expect(store.get().mcp.injectIntoProviders).toEqual(["codex-lead"]);
+
+    writeConfig(paseoHome, persisted);
+    expect(store.reload()).toEqual({
+      appliedPaths: ["daemon.mcp.injectIntoProviders"],
+      restartRequiredPaths: [],
+      overrideControlledPaths: [],
+    });
+    expect(store.get().mcp.injectIntoProviders).toBeUndefined();
+    expect(changes).toEqual([["codex-lead"], undefined]);
+  });
+
+  test("applies the global plugin switch in both directions", () => {
+    const { paseoHome, store, persisted } = createReloadableStore({
+      initialPersisted: { version: 1, pluginsEnabled: false },
+    });
+    const changes: unknown[] = [];
+    store.onFieldChange("pluginsEnabled", (value) => changes.push(value));
+
+    writeConfig(paseoHome, { ...persisted, pluginsEnabled: true });
+    expect(store.reload()).toEqual({
+      appliedPaths: ["pluginsEnabled"],
+      restartRequiredPaths: [],
+      overrideControlledPaths: [],
+    });
+    expect(store.get().pluginsEnabled).toBe(true);
+
+    writeConfig(paseoHome, { ...persisted, pluginsEnabled: false });
+    expect(store.reload()).toEqual({
+      appliedPaths: ["pluginsEnabled"],
+      restartRequiredPaths: [],
+      overrideControlledPaths: [],
+    });
+    expect(store.get().pluginsEnabled).toBe(false);
+    expect(changes).toEqual([true, false]);
   });
 
   test("classifies every leaf when a parent subtree is added", () => {

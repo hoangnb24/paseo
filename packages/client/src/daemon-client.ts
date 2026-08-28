@@ -103,6 +103,7 @@ import type {
   WorkspaceCreateRequest,
   WorkspaceRecoveryState,
   PluginListItem,
+  PluginLogEntry,
 } from "@getpaseo/protocol/messages";
 import type {
   AgentPermissionRequest,
@@ -4755,6 +4756,16 @@ export class DaemonClient {
     return payload.plugins;
   }
 
+  async getPluginLogs(pluginId: string): Promise<PluginLogEntry[]> {
+    const requestId = this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId,
+      message: { type: "plugin.logs.get.request", requestId, pluginId },
+      responseType: "plugin.logs.get.response",
+    });
+    return payload.entries;
+  }
+
   async installDirectoryPlugin(path: string, id?: string): Promise<PluginListItem> {
     const requestId = this.createRequestId();
     const payload = await this.sendCorrelatedSessionRequest({
@@ -5345,17 +5356,17 @@ export class DaemonClient {
     }
   }
 
-  private requireDaemonConfigReloadSupport(): void {
-    // COMPAT(daemonConfigReload): added in v0.4.0, remove gate after 2027-02-14.
-    if (this.lastServerInfoMessage?.features?.daemonConfigReload !== true) {
-      throw new Error("Update the host to reload daemon configuration.");
-    }
-  }
-
   private requireProviderScopedPaseoToolsSupport(): void {
     // COMPAT(providerScopedPaseoTools): added in v0.2.6, remove gate after 2027-02-04 once daemon floor >= v0.2.6.
     if (this.lastServerInfoMessage?.features?.providerScopedPaseoTools !== true) {
       throw new Error("Update the host to configure provider-scoped Paseo tools.");
+    }
+  }
+
+  private requireDaemonConfigReloadSupport(): void {
+    // COMPAT(daemonConfigReload): added in v0.4.0, remove gate after 2027-02-14.
+    if (this.lastServerInfoMessage?.features?.daemonConfigReload !== true) {
+      throw new Error("Update the host to reload daemon configuration.");
     }
   }
 

@@ -532,9 +532,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     mcp: {
       enabled: config.mcpEnabled ?? true,
       injectIntoAgents: config.mcpInjectIntoAgents ?? true,
-      ...(config.mcpInjectIntoProviders !== undefined
-        ? { injectIntoProviders: config.mcpInjectIntoProviders }
-        : {}),
+      injectIntoProviders: config.mcpInjectIntoProviders,
     },
     ...(config.hostnames !== undefined ? { hostnames: config.hostnames } : {}),
     cors: { allowedOrigins: config.corsAllowedOrigins },
@@ -1496,7 +1494,6 @@ export async function createPaseoDaemon(
   const start = async () => {
     let mainStarted = false;
     try {
-      await pluginRuntime.start();
       if (serviceProxyListenTarget) {
         const boundServiceProxyTarget = await serviceProxy.startStandalone({
           listenTarget: serviceProxyListenTarget,
@@ -1589,6 +1586,7 @@ export async function createPaseoDaemon(
                 getHostnames: () => configuredHostnames,
                 daemonStatusRpc: dependencies.serverFeatureOverrides?.daemonStatusRpc,
                 relayConfig: dependencies.serverFeatureOverrides?.relayConfig,
+                startPaused: true,
               },
               workspaceAutoName,
               config.auth,
@@ -1641,6 +1639,9 @@ export async function createPaseoDaemon(
               workspaceSetupRuntime,
               pluginRuntime,
             );
+            pluginRuntime.bindPaseoSessionHost(wsServer);
+            await pluginRuntime.start();
+            wsServer.beginAcceptingConnections();
             relayRuntime = createRelayRuntime({
               config: {
                 enabled: relayEnabled,

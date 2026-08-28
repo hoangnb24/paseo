@@ -970,6 +970,8 @@ export const ar: TranslationResources = {
       },
       show: {
         label: "إظهار",
+        branch: "الفرع",
+        project: "المشروع",
         host: "المضيف",
         changeRequest: "طلب السحب",
         checks: "الفحوصات",
@@ -1411,6 +1413,7 @@ export const ar: TranslationResources = {
     defaultModel: "تقصير",
     profiles: "الملفات الشخصية",
     providers: "المزودون",
+    model: "النموذج",
     editProfiles: "تحرير",
     editProfilesLabel: "تحرير ملفات الوكيل",
     createProfile: "إنشاء ملف شخصي",

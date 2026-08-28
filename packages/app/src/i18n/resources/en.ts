@@ -979,6 +979,8 @@ export const en = {
       },
       show: {
         label: "Show",
+        branch: "Branch",
+        project: "Project",
         host: "Host",
         changeRequest: "Pull request",
         checks: "Checks",
@@ -1421,6 +1423,7 @@ export const en = {
     defaultModel: "Default",
     profiles: "Profiles",
     providers: "Providers",
+    model: "Model",
     editProfiles: "Edit",
     editProfilesLabel: "Edit agent profiles",
     createProfile: "Create profile",
@@ -1814,6 +1817,15 @@ export const en = {
       idPlaceholder: "Manifest default",
       install: "Install directory",
       installing: "Installing…",
+      logs: {
+        action: "Logs",
+        title: "Logs: {{id}}",
+        loading: "Loading logs…",
+        refresh: "Refresh",
+        refreshing: "Refreshing…",
+        errorTitle: "Unable to load plugin logs",
+        empty: "No plugin output yet",
+      },
       status: { running: "running", disabled: "disabled", failed: "failed" },
       actions: {
         reload: "Reload",
