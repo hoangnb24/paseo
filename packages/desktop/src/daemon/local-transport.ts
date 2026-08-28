@@ -1,4 +1,5 @@
 import { BrowserWindow } from "electron";
+import { connect } from "node:net";
 import { WebSocket, type RawData } from "ws";
 
 interface TransportTarget {
@@ -33,21 +34,6 @@ function emitTransportEvent(payload: TransportEventPayload): void {
   }
 }
 
-/**
- * Build a WebSocket URL that connects through a Unix domain socket or Windows
- * named pipe.  The `ws` library supports these via the `ws+unix://` scheme:
- *
- *   ws+unix:///path/to/socket:/ws
- *   ws+unix://./pipe/paseo:/ws        (Windows named pipe)
- *
- * The part before `:` is the IPC path, the part after is the HTTP request
- * path used during the WebSocket upgrade handshake.
- */
-function buildLocalWebSocketUrl(target: TransportTarget): string {
-  const ipcPath = target.transportPath;
-  return `ws+unix://${ipcPath}:${WS_ENDPOINT_PATH}`;
-}
-
 function describeTransportTarget(target: TransportTarget): string {
   return target.transportType === "pipe" ? "local daemon pipe" : "local daemon socket";
 }
@@ -66,10 +52,11 @@ function decodeTransportMessage(input: { text?: string; binaryBase64?: string })
 
 export function openLocalTransportSession(target: TransportTarget): Promise<string> {
   const sessionId = `local-session-${++nextSessionId}`;
-  const url = buildLocalWebSocketUrl(target);
 
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(`ws://localhost${WS_ENDPOINT_PATH}`, {
+      createConnection: () => connect(target.transportPath),
+    });
     const session: Session = {
       id: sessionId,
       ws,
