@@ -7,7 +7,9 @@ import { createRootLogger } from "./logger.js";
 import type { DaemonLifecycleIntent } from "./bootstrap.js";
 import { getProcessDiagnostics } from "./process-diagnostics.js";
 
-process.title = "Paseo Daemon";
+if (process.env.MEETLESS_RUNTIME_PACKAGED !== "1") {
+  process.title = "Paseo Daemon";
+}
 
 type SupervisorLifecycleMessage =
   | {
