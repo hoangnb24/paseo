@@ -8,7 +8,6 @@ import { inheritLoginShellEnv } from "./login-shell-env.js";
 
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
   app,
@@ -97,6 +96,7 @@ import {
   type AgentDeepLinkTarget,
 } from "@getpaseo/protocol/agent-deep-link";
 import { AgentNavigationInbox, parseAgentDeepLinkFromArgv } from "./agent-navigation.js";
+import { resolveWindowIconPath } from "./window-icon.js";
 
 const DEV_SERVER_URL = process.env.EXPO_DEV_URL ?? "http://localhost:8081";
 const APP_SCHEME = "paseo";
@@ -655,8 +655,7 @@ function getWindowIconCandidates(): string[] {
 }
 
 function getWindowIconPath(): string | null {
-  const candidates = getWindowIconCandidates();
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+  return resolveWindowIconPath(process.env.PASEO_APP_ICON_PATH, getWindowIconCandidates());
 }
 
 function applyAppIcon(): void {
